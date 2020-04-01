@@ -18,4 +18,6 @@ def rread(array):
 
 
 if __name__ == '__main__':
-    rread(numpy.asarray(PIL.Image.open('resistors/0001.jpg')))
+    resistor = PIL.Image.open("resistor_pictures/0001.jpg")
+    print(rread(numpy.asarray(resistor)))
+    resistor.show()
