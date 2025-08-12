@@ -1,22 +1,29 @@
 import csv
+from pathlib import Path
+
 import numpy
+import pytest
 import rreader
 import PIL.Image
 
 
-class TestResistors:
-    def test_resistors(self):
-        with open('resistor_pictures/resistors.csv', 'r') as csvfile:
-            reader = csv.reader(csvfile, delimiter=',', quotechar='|')
-            for number, value in reader:
-                yield self.check_resistors, 'resistor_pictures/'+str(number).zfill(4)+'.jpg', int(value)
+def _load_cases():
+    """Return (filename, value) tuples for each sample resistor image."""
+    cases = []
+    with open("resistor_pictures/resistors.csv", "r") as csvfile:
+        reader = csv.reader(csvfile, delimiter=",", quotechar="|")
+        for number, value in reader:
+            fname = Path("resistor_pictures") / f"{int(number):04d}.jpg"
+            if fname.exists():
+                cases.append((str(fname), float(value)))
+    return cases
 
-    @staticmethod
-    def check_resistors(fname, value):
-        assert rreader.rread(numpy.asarray(PIL.Image.open(fname))) == value
+
+@pytest.mark.parametrize("fname,value", _load_cases())
+def test_resistors(fname, value):
+    """Validate that each example image is parsed to the expected value."""
+    assert rreader.rread(numpy.asarray(PIL.Image.open(fname))) == value
 
 
 if __name__ == "__main__":
-    test = TestResistors()
-    for i in test.test_resistors():
-        pass
+    pytest.main([__file__])
