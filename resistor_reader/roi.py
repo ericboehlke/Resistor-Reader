@@ -20,6 +20,7 @@ from .logging_utils import save_image
 # Helper functions
 # ---------------------------------------------------------------------------
 
+
 def _foreground_mask(hsv: np.ndarray) -> np.ndarray:
     """Return a binary mask separating the resistor from the white background."""
 
@@ -28,10 +29,15 @@ def _foreground_mask(hsv: np.ndarray) -> np.ndarray:
     bg_hue = np.median(border).astype(np.uint8)
 
     hue_diff = cv2.absdiff(h, np.full_like(h, bg_hue))
-    mask = (hue_diff > 15) & (s > 30) & (v < 220)
+    mask = (hue_diff > 8) & (s > 40) & (v < 220)
     mask = mask.astype(np.uint8)
-    kernel = np.ones((3, 3), np.uint8)
-    return cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    kernel = np.ones((10, 10), np.uint8)
+    mask = cv2.dilate(mask, kernel, iterations=1)
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    return mask
 
 
 def _largest_component(mask: np.ndarray) -> np.ndarray:
@@ -52,7 +58,9 @@ def _remove_leads(mask: np.ndarray, dist_thresh: float = 3.0) -> np.ndarray:
     return (dist >= dist_thresh).astype(np.uint8)
 
 
-def _rotate_and_crop(image: np.ndarray, mask: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
+def _rotate_and_crop(
+    image: np.ndarray, mask: np.ndarray, pad: int = 8
+) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
     """Rotate the image so the resistor is horizontal and return the tight crop."""
 
     pts = cv2.findNonZero(mask)
@@ -63,12 +71,25 @@ def _rotate_and_crop(image: np.ndarray, mask: np.ndarray) -> Tuple[np.ndarray, T
 
     rot_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
     h, w = image.shape[:2]
-    rotated_img = cv2.warpAffine(image, rot_mat, (w, h), flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255))
+    rotated_img = cv2.warpAffine(
+        image, rot_mat, (w, h), flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255)
+    )
     rotated_mask = cv2.warpAffine(mask, rot_mat, (w, h), flags=cv2.INTER_NEAREST)
 
     ys, xs = np.where(rotated_mask > 0)
+    if ys.size == 0 or xs.size == 0:
+        # Nothing in mask → return rotated full image and no bbox
+        return rotated_img, (0, 0, h, w)
+
     y0, y1 = ys.min(), ys.max() + 1
     x0, x1 = xs.min(), xs.max() + 1
+
+    # Apply padding and clamp to bounds
+    y0 = max(0, y0 - pad)
+    x0 = max(0, x0 - pad)
+    y1 = min(h, y1 + pad)
+    x1 = min(w, x1 + pad)
+
     crop = rotated_img[y0:y1, x0:x1]
     return crop, (y0, x0, y1, x1)
 
@@ -76,6 +97,7 @@ def _rotate_and_crop(image: np.ndarray, mask: np.ndarray) -> Tuple[np.ndarray, T
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def detect_resistor_roi(
     artifacts: Dict[str, np.ndarray],
@@ -93,8 +115,8 @@ def detect_resistor_roi(
     hsv = artifacts["hsv"]
 
     mask = _foreground_mask(hsv)
+    mask = _remove_leads(mask, dist_thresh=15.0)
     mask = _largest_component(mask)
-    mask = _remove_leads(mask, dist_thresh=3.0)
 
     crop, bbox = _rotate_and_crop(image, mask)
 
@@ -103,4 +125,3 @@ def detect_resistor_roi(
         save_image(crop, "roi", debug=True, config=config, ts=ts)
 
     return {"bbox": bbox, "crop": crop}
-
