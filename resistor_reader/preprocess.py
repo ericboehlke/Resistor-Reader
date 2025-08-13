@@ -33,12 +33,6 @@ def auto_white_balance(array: np.ndarray) -> np.ndarray:
     return np.clip(balanced, 0, 255).astype(np.uint8)
 
 
-def rgb_to_lab(array: np.ndarray) -> np.ndarray:
-    """Convert an RGB image array to LAB color space using Pillow."""
-    image = PIL.Image.fromarray(array)
-    return np.asarray(image.convert("LAB"))
-
-
 def preprocess(
     array: np.ndarray,
     config: Dict[str, Any] | None = None,
@@ -48,7 +42,7 @@ def preprocess(
 ) -> Dict[str, np.ndarray]:
     """Apply basic preprocessing and optionally log the result.
 
-    Currently this performs automatic white balance and LAB conversion. The
+    Currently this performs automatic white balance and HSV conversion. The
     preprocessed RGB image is saved to ``logs`` when ``debug`` is ``True``.
 
     Parameters
@@ -67,15 +61,16 @@ def preprocess(
     -------
     dict
         Dictionary containing at least the preprocessed RGB image under the
-        ``"image"`` key and its LAB representation under ``"lab"``.
+        ``"image"`` key and its HSV representation under ``"hsv"``.
     """
 
     # Crop the image to the region (left=36, upper=64, right=598, lower=480)
     cropped = array[64:480, 36:598]
     processed = auto_white_balance(cropped)
-    lab = rgb_to_lab(processed)
+    # Convert to HSV color space using Pillow
+    hsv = np.asarray(PIL.Image.fromarray(processed).convert("HSV"))
     debug = debug and config.get("processing", {}).get("debug_image", False)
     save_image(processed, "pre", debug=debug, config=config, ts=ts)
-    return {"image": processed, "lab": lab}
+    return {"image": processed, "hsv": hsv}
 
 

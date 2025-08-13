@@ -281,6 +281,9 @@ All config should be overridable via CLI flags when running on a dev machine.
   * Unit tests per agent (ROI detection, segmentation, classification)
   * Golden regression test: run pipeline on all images and compare against CSV
   * Performance test: assert p95 latency < 1s on Pi Zero build
+  * Never delete or comment out tests; even if the pipeline is incomplete, keep
+    existing tests in place and allow them to fail until the implementation
+    supports them.
 
 ---
 
