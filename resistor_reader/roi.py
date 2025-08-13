@@ -52,13 +52,26 @@ def detect_resistor_roi(
 
     config = config or {}
     image = artifacts["image"]
-
-    hsv = np.asarray(PIL.Image.fromarray(image).convert("HSV"))
+    hsv = artifacts["hsv"]
     h, s = hsv[:, :, 0], hsv[:, :, 1]
     border = np.concatenate([h[0, :], h[-1, :], h[:, 0], h[:, -1]])
     bg_hue = float(np.median(border))
     mask = (_hue_difference(h, bg_hue) > 15) & (s > 30)
     xs, ys = _largest_component(mask)
+
+    # Also mask out very bright areas that are likely reflections
+    v = hsv[:, :, 2]
+    mask &= v < 220
+    xs, ys = _largest_component(mask)
+
+    # Add in a debugging image before cropping and rotating
+    save_image(
+        mask.astype(np.uint8) * 255,
+        "roi_mask",
+        debug=debug and config.get("region_of_interest", {}).get("debug_image", False),
+        config=config,
+        ts=ts,
+    )
 
     x0, x1 = xs.min(), xs.max() + 1
     y0, y1 = ys.min(), ys.max() + 1
