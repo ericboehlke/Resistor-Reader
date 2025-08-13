@@ -12,6 +12,8 @@ dependencies = [
     "numpy",
     "Pillow",
     "pyyaml",
+    "opencv-python-headless",
+    "scipy",
 ]
 
 [tool.uv]
