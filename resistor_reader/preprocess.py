@@ -1,5 +1,11 @@
+from __future__ import annotations
+
+from typing import Any, Dict
+
 import numpy as np
 import PIL.Image
+
+from .logging_utils import save_image
 
 
 def auto_white_balance(array: np.ndarray) -> np.ndarray:
@@ -31,5 +37,42 @@ def rgb_to_lab(array: np.ndarray) -> np.ndarray:
     """Convert an RGB image array to LAB color space using Pillow."""
     image = PIL.Image.fromarray(array)
     return np.asarray(image.convert("LAB"))
+
+
+def preprocess(
+    array: np.ndarray,
+    config: Dict[str, Any] | None = None,
+    *,
+    debug: bool = False,
+    ts: str | None = None,
+) -> Dict[str, np.ndarray]:
+    """Apply basic preprocessing and optionally log the result.
+
+    Currently this performs automatic white balance and LAB conversion. The
+    preprocessed RGB image is saved to ``logs`` when ``debug`` is ``True``.
+
+    Parameters
+    ----------
+    array:
+        Input RGB image as ``uint8`` numpy array.
+    config:
+        Optional configuration dictionary. Only ``runtime.debug_dir`` is used.
+    debug:
+        When ``True`` the preprocessed image is written to disk using the
+        ``save_image`` helper.
+    ts:
+        Optional timestamp prefix to use for the saved image filename.
+
+    Returns
+    -------
+    dict
+        Dictionary containing at least the preprocessed RGB image under the
+        ``"image"`` key and its LAB representation under ``"lab"``.
+    """
+
+    processed = auto_white_balance(array)
+    lab = rgb_to_lab(processed)
+    save_image(processed, "pre", debug=debug, config=config, ts=ts)
+    return {"image": processed, "lab": lab}
 
 

@@ -1,5 +1,5 @@
 """Core package for the resistor reader project."""
 
-from . import orchestrator, preprocess
+from . import orchestrator, preprocess, logging_utils
 
-__all__ = ["orchestrator", "preprocess"]
+__all__ = ["orchestrator", "preprocess", "logging_utils"]
