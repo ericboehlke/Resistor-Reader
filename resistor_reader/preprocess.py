@@ -70,7 +70,9 @@ def preprocess(
         ``"image"`` key and its LAB representation under ``"lab"``.
     """
 
-    processed = auto_white_balance(array)
+    # Crop the image to the region (left=36, upper=64, right=598, lower=480)
+    cropped = array[64:480, 36:598]
+    processed = auto_white_balance(cropped)
     lab = rgb_to_lab(processed)
     debug = debug and config.get("processing", {}).get("debug_image", False)
     save_image(processed, "pre", debug=debug, config=config, ts=ts)
