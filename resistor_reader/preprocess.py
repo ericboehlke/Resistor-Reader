@@ -72,6 +72,7 @@ def preprocess(
 
     processed = auto_white_balance(array)
     lab = rgb_to_lab(processed)
+    debug = debug and config.get("processing", {}).get("debug_image", False)
     save_image(processed, "pre", debug=debug, config=config, ts=ts)
     return {"image": processed, "lab": lab}
 

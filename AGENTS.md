@@ -213,24 +213,30 @@ camera:
   resolution: [640, 480]
   exposure: "auto"   # or fixed value
   white_balance: "auto"
+  debug_image: true
 
 processing:
   work_width: 640
-  denoise_kernel: 3
-  contrast_equalize: true
-  hsv_classify: true
+  debug_image: true
+
+region_of_interest:
+  debug_image: true
 
 segmentation:
   min_band_width_px: 6
   band_smooth_window: 9
+  debug_image: true
 
 classification:
   confidence_threshold: 0.65
+  debug_image: true
 
 runtime:
   timeout_ms: 900
-  debug: false
-  debug_dir: "logs/"
+  debug:
+    enabled: true
+    timings: true
+    dir: "logs/"
   save_overlay: true
 
 display:
@@ -300,7 +306,6 @@ All config should be overridable via CLI flags when running on a dev machine.
 * Drive 4-digit, 16-segment display for both result and error codes
 * Add simple calibration routine (white reference, color chart)
 * Add retry-with-guidance: blink LED pattern suggesting better placement
-* Optional SMD code reader (OCR) as a separate agent (disabled by default)
 
 ---
 

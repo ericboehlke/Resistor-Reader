@@ -11,6 +11,7 @@ requires-python = ">=3.8"
 dependencies = [
     "numpy",
     "Pillow",
+    "pyyaml",
 ]
 
 [tool.uv]

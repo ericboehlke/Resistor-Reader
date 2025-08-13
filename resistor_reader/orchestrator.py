@@ -18,7 +18,7 @@ def run_once(array: np.ndarray, config: Dict[str, Any] | None = None) -> int:
     """
 
     config = config or {}
-    debug = config.get("runtime", {}).get("debug", False)
+    debug = config.get("runtime", {}).get("debug", {}).get("enabled", False)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S%f")
     preprocess.preprocess(array, config=config, debug=debug, ts=ts)
     return 100
