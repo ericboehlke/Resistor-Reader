@@ -119,6 +119,7 @@ All agents are pure-Python modules designed to be callable functions/classes wit
 * **Interface:** `segment_bands(roi, config) -> list[BandRegion]`
 * **Errors:** `E04_BAND_SEG_FAIL` (insufficient separation)
 
+
 ---
 
 ### 6) Color Classification Agent

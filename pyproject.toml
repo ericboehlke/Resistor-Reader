@@ -14,6 +14,9 @@ dependencies = [
     "pyyaml",
     "opencv-python-headless",
     "scipy",
+    "picamera",
+    "RPi.GPIO",
+    "adafruit-circuitpython-led-backpack",
 ]
 
 [tool.uv]
