@@ -14,7 +14,7 @@ networking.
 ```bash
 mkdir yocto-build
 cd yocto-build
-repo init -u ../Resistor-Reader/yocto/manifest.xml
+repo init -u ../Resistor-Reader -m yocto/manifest.xml
 repo sync
 ```
 
