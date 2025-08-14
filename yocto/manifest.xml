@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="yocto" fetch="https://git.yoctoproject.org"/>
+  <remote name="oe" fetch="https://git.openembedded.org"/>
+  <remote name="raspberrypi" alias="origin"  fetch="https://github.com/agherzan" />
+
+  <default revision="scarthgap"/>
+
+  <project name="poky"              path="poky"              remote="yocto"       />
+  <project name="meta-raspberrypi"  path="meta-raspberrypi"  remote="raspberrypi" />
+  <project name="meta-openembedded" path="meta-openembedded" remote="oe"          />
+</manifest>
