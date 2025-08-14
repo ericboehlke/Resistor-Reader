@@ -17,4 +17,4 @@ dependencies = [
 ]
 
 [tool.uv]
-dev-dependencies = ["pytest"]
+dev-dependencies = ["pytest", "matplotlib"]

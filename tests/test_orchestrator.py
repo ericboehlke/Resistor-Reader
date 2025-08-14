@@ -1,7 +1,8 @@
 import csv
+import math
 from pathlib import Path
 import sys
-import yaml 
+import yaml
 
 
 # Ensure the project root is on the import path when tests are run directly
@@ -24,18 +25,28 @@ def _load_cases():
                 cases.append((str(fname), float(value)))
     return cases
 
+
 # Load test.yaml as a dictionary
 with open("tests/test.yaml", "r") as f:
     test_config = yaml.safe_load(f)
 
+
 @pytest.mark.parametrize("fname,value", _load_cases())
 def test_resistors(fname, value):
     """Validate that each example image is parsed to the expected value."""
-    assert orchestrator.run_once(numpy.asarray(PIL.Image.open(fname)), test_config) == value
+    assert math.isclose(
+        orchestrator.run_once(numpy.asarray(PIL.Image.open(fname)), test_config), value
+    )
+
 
 def test_0():
     """Validate that each example image is parsed to the expected value."""
-    assert orchestrator.run_once(numpy.asarray(PIL.Image.open(Path("resistor_pictures") / "0000.jpg")), test_config) == 100
+    assert (
+        orchestrator.run_once(
+            numpy.asarray(PIL.Image.open(Path("resistor_pictures") / "0000.jpg")), test_config
+        )
+        == 100
+    )
 
 
 if __name__ == "__main__":
