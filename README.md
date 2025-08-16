@@ -67,3 +67,14 @@ ansible-playbook -i localhost, -c local pi_usb_gadget.yml \
   -e password='mypassword' \
   -e ssh_public_key="$(cat ~/.ssh/id_rsa.pub)"
 ```
+
+
+# Install
+New raspbian lite 32 bit
+connect to usb ethernet
+sudo apt update
+sudo apt full-upgrade
+sudo apt install git python3-picamera2
+curl -LsSf https://astral.sh/uv/install.sh | sh
+copy ssh keys
+git clone git@github.com:ericboehlke/Resistor-Reader.git
