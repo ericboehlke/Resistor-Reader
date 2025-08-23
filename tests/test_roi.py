@@ -1,9 +1,10 @@
+import sys
+from pathlib import Path
+
 import numpy as np
 import PIL.Image
 import pytest
 import yaml
-from pathlib import Path
-import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 

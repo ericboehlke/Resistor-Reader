@@ -1,7 +1,6 @@
 import pytest
-from resistor_reader.resolve import resolve_value
 
-import pytest
+from resistor_reader.resolve import resolve_value
 
 # Import your function (adjust the import path as needed)
 # from your_module import resolve_value

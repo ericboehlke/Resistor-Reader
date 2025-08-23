@@ -1,6 +1,6 @@
-import pytest
 import numpy
 import PIL
+
 from resistor_reader.bands import _segment_columns
 
 

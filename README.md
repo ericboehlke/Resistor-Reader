@@ -25,56 +25,38 @@ Build a distribution:
 uv build
 ```
 
+## Install on Raspberry Pi Zero
 
-## Ansible Examples
-
-### Password login only
-
-```bash
-sudo mount /dev/sdX1 /media/eric/bootfs
-sudo mount /dev/sdX2 /media/eric/rootfs
-
-ansible-playbook -i localhost, -c local pi_usb_gadget.yml \
-  -e bootfs_mount=/media/eric/bootfs \
-  -e rootfs_mount=/media/eric/rootfs \
-  -e username=pi \
-  -e password='mypassword'
-```
-
-### Key login only
+1. Flash an SD card with Raspbian Lite (32 bit)
+2. Connect the Pi to a USB to Ethernet adapter and connect it to the network
+3. Log in to the Pi
+4. `sudo apt update`
+5. `sudo apt full-upgrade`
+6. `sudo apt install git`
+7. `git clone https://github.com/ericboehlke/Resistor-Reader.git`
+8. `cd Resistor-Reader`
+9. Install dependencies
 
 ```bash
-sudo mount /dev/sdX1 /media/eric/bootfs
-sudo mount /dev/sdX2 /media/eric/rootfs
-
-ansible-playbook -i localhost, -c local pi_usb_gadget.yml \
-  -e bootfs_mount=/media/eric/bootfs \
-  -e rootfs_mount=/media/eric/rootfs \
-  -e username=pi \
-  -e ssh_public_key="$(cat ~/.ssh/id_rsa.pub)"
+sudo apt install \
+  python3-dev \
+  python3-pip \
+  python3-rpi.gpio \
+  python3-picamera2 \
+  python3-opencv \
+  python3-pil \
+  python3-scipy \
+  python3-yaml \
+  python3-pytest
 ```
 
-### Both password and key login
+10. `python3 -m venv .venv --system-site-packages`
+11. `source .venv/bin/activate`
+12. `python3 -m pip install adafruit-circuitpython-ht16k33`
+13. Enable i2c using `raspi-config`
+
+## Running
 
 ```bash
-sudo mount /dev/sdX1 /media/eric/bootfs
-sudo mount /dev/sdX2 /media/eric/rootfs
-
-ansible-playbook -i localhost, -c local pi_usb_gadget.yml \
-  -e bootfs_mount=/media/eric/bootfs \
-  -e rootfs_mount=/media/eric/rootfs \
-  -e username=pi \
-  -e password='mypassword' \
-  -e ssh_public_key="$(cat ~/.ssh/id_rsa.pub)"
+python3 resistor_reader/main.py read
 ```
-
-
-# Install
-New raspbian lite 32 bit
-connect to usb ethernet
-sudo apt update
-sudo apt full-upgrade
-sudo apt install git python3-picamera2
-curl -LsSf https://astral.sh/uv/install.sh | sh
-copy ssh keys
-git clone git@github.com:ericboehlke/Resistor-Reader.git

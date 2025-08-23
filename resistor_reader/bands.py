@@ -15,7 +15,6 @@ from scipy.signal import find_peaks
 
 from .logging_utils import save_image
 
-
 # Reference RGB colors for resistor bands
 COLOR_RGB: Dict[str, Tuple[int, int, int]] = {
     "black": (0.193 * 255, 0.121 * 255, 0.092 * 255),
@@ -43,7 +42,12 @@ _TOLERANCE_COLORS = {"gold", "silver"}
 
 # --- helper for debug plotting without introducing new dependencies in your save_image
 def _save_matplotlib_plot(
-    curves, titles, image=None, peaks=None, segments=None, out_path="segmentation_debug.png"
+    curves,
+    titles,
+    image=None,
+    peaks=None,
+    segments=None,
+    out_path="segmentation_debug.png",
 ):
     """
     curves: list of (y_values, label) where y_values is 1D numpy array
@@ -119,7 +123,9 @@ def _classify(segment: np.ndarray) -> str:
     y0, y1 = int(h * 0.2), int(h * 0.8)
     central = segment[y0:y1]
     mean_rgb = central.mean(axis=(0, 1)).astype(np.uint8)
-    mean_lab = cv2.cvtColor(mean_rgb.reshape(1, 1, 3), cv2.COLOR_RGB2LAB)[0, 0].astype(np.float32)
+    mean_lab = cv2.cvtColor(mean_rgb.reshape(1, 1, 3), cv2.COLOR_RGB2LAB)[0, 0].astype(
+        np.float32
+    )
     dists = {
         name: float(np.linalg.norm(mean_lab - ref.astype(np.float32)))
         for name, ref in _REF_LAB.items()
@@ -142,7 +148,11 @@ def segment_and_classify_bands(
 
     # Canonical orientation: tolerance band should be last
     flipped = False
-    if labels and labels[0] in _TOLERANCE_COLORS and labels[-1] not in _TOLERANCE_COLORS:
+    if (
+        labels
+        and labels[0] in _TOLERANCE_COLORS
+        and labels[-1] not in _TOLERANCE_COLORS
+    ):
         labels = labels[1:] + labels[:1]
         segments = segments[1:] + segments[:1]
         flipped = True
@@ -151,7 +161,9 @@ def segment_and_classify_bands(
     if dbg:
         # Upscale to fixed size for legibility
         target_w, target_h = 600, 400
-        overlay = cv2.resize(image, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+        overlay = cv2.resize(
+            image, (target_w, target_h), interpolation=cv2.INTER_NEAREST
+        )
 
         # Flip horizontally if needed
         if flipped:

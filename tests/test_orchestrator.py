@@ -1,17 +1,18 @@
 import csv
 import math
-from pathlib import Path
 import sys
-import yaml
+from pathlib import Path
 
+import yaml
 
 # Ensure the project root is on the import path when tests are run directly
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import numpy
-import pytest
-from resistor_reader import orchestrator
 import PIL.Image
+import pytest
+
+from resistor_reader import orchestrator
 
 
 def _load_cases():
@@ -35,15 +36,17 @@ with open("tests/test.yaml", "r") as f:
 def test_resistors(fname, value):
     """Validate that each example image is parsed to the expected value."""
     assert math.isclose(
-        orchestrator.run_once(numpy.asarray(PIL.Image.open(fname)), test_config), value
+        orchestrator.read_resistor(numpy.asarray(PIL.Image.open(fname)), test_config),
+        value,
     )
 
 
 def test_0():
     """Validate that each example image is parsed to the expected value."""
     assert (
-        orchestrator.run_once(
-            numpy.asarray(PIL.Image.open(Path("resistor_pictures") / "0000.jpg")), test_config
+        orchestrator.read_resistor(
+            numpy.asarray(PIL.Image.open(Path("resistor_pictures") / "0000.jpg")),
+            test_config,
         )
         == 100
     )

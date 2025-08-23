@@ -72,5 +72,3 @@ def preprocess(
     debug = debug and config.get("processing", {}).get("debug_image", False)
     save_image(processed, "pre", debug=debug, config=config, ts=ts)
     return {"image": processed, "hsv": hsv}
-
-

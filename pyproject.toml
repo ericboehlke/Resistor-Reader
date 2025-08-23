@@ -10,13 +10,15 @@ readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
     "pyyaml",
-    "adafruit-circuitpython-ht16k33",
+    "Pillow",
+    "numpy",
+    "scipy",
+    "opencv-python",
 ]
-# sudo apt install python3-picamera2 python3-opencv python3-pil python3-scipy python3-rpi.gpio python3-dev python3-yaml python3-pytest python3-pip
-# python3 -m venv .venv --system-site-packages
-# in .venv
-# python3 -m pip install adafruit-circuitpython-ht16k33
-# enable i2c in raspi-config
 
 [tool.uv]
 dev-dependencies = ["pytest"]
+
+[tool.ruff]
+line-length = 88
+lint.extend-select = ["I"]
