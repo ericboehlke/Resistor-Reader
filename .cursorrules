@@ -1,0 +1,21 @@
+# Resistor Reader Project Rules
+
+## Environment
+
+- Target Hardware: Raspberry Pi Zero (ARMv6).
+- Performance is critical: Use NumPy vectorization; avoid Python loops over pixels.
+- Libraries: OpenCV (headless), NumPy, PyYAML. No heavy ML frameworks.
+
+## Coding Standards
+
+- Every pipeline stage must use `dataclasses` for Input/Output.
+- Use Type Hinting for all function signatures.
+- Error handling: Use the E0X error codes defined in ARCHITECTURE.md.
+- Logging: Use a centralized logger; ensure it is compatible with Log2Ram (don't spam disk).
+  - Logging debug images and test summaries is fine during testing.
+
+## AI Instructions
+
+- Before writing code for a stage, provide a brief "Logic Plan" for approval.
+- If a change affects color detection, suggest how to test it using the "Live Trackbar" tool.
+- Always check for regressions: Ensure changes to one color don't break the "Tan" body detection.
