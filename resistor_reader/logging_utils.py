@@ -8,6 +8,15 @@ import numpy as np
 import PIL.Image
 
 
+def _resolve_debug_dir(config: Dict[str, Any]) -> Path:
+    runtime_cfg = config.get("runtime", {})
+    # Support both runtime.debug.dir and legacy runtime.debug_dir.
+    nested = runtime_cfg.get("debug", {}).get("dir")
+    flat = runtime_cfg.get("debug_dir")
+    debug_dir_value = nested or flat or "logs"
+    return Path(debug_dir_value)
+
+
 def save_image(
     image: np.ndarray | PIL.Image.Image,
     suffix: str,
@@ -40,7 +49,7 @@ def save_image(
     if config is None:
         config = {}
 
-    debug_dir = Path(config.get("runtime", {}).get("debug_dir", "logs"))
+    debug_dir = _resolve_debug_dir(config)
     debug_dir.mkdir(parents=True, exist_ok=True)
 
     if ts is None:
@@ -49,6 +58,16 @@ def save_image(
     if isinstance(image, np.ndarray):
         image = PIL.Image.fromarray(image)
 
-    path = debug_dir / f"{ts}_{suffix}.jpg"
+    filename_prefix = (
+        config.get("runtime", {}).get("debug", {}).get("filename_prefix")
+        if isinstance(config, dict)
+        else None
+    )
+    if isinstance(filename_prefix, str) and filename_prefix:
+        filename = f"{filename_prefix}_{suffix}.jpg"
+    else:
+        filename = f"{ts}_{suffix}.jpg"
+
+    path = debug_dir / filename
     image.save(path)
     return path

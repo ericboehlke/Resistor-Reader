@@ -170,7 +170,9 @@ def segment_bands(
         metadata["error_code"] = ErrorCodeEnum.E03.value
         metadata["error_msg"] = f"Expected 4 bands, found {len(boxes)}"
 
-    dbg = debug and stage_input.config.get("segmentation", {}).get("debug_image", False)
+    dbg = debug and stage_input.config.get("classification", {}).get(
+        "debug_image", False
+    )
     if dbg:
         target_w, target_h = 600, 400
         overlay = cv2.resize(
@@ -201,7 +203,7 @@ def segment_bands(
                 (s_up + 2, 20),
                 font,
                 font_scale,
-                (255, 0, 0),
+                (0, 0, 255),
                 text_th,
                 cv2.LINE_AA,
             )
@@ -291,7 +293,7 @@ def classify_bands(
                 (s_up + 2, 20),
                 font,
                 font_scale,
-                (255, 0, 0),
+                (0, 0, 255),
                 text_th,
                 cv2.LINE_AA,
             )
