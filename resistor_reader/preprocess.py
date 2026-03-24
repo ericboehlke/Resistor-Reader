@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict
-
 import numpy as np
-import PIL.Image
 
 from .logging_utils import save_image
+from .models import PreprocessInput, PreprocessOutput
 
 
 def auto_white_balance(array: np.ndarray) -> np.ndarray:
@@ -34,41 +32,26 @@ def auto_white_balance(array: np.ndarray) -> np.ndarray:
 
 
 def preprocess(
-    array: np.ndarray,
-    config: Dict[str, Any] | None = None,
+    stage_input: PreprocessInput,
     *,
     debug: bool = False,
     ts: str | None = None,
-) -> Dict[str, np.ndarray]:
-    """Apply basic preprocessing and optionally log the result.
-
-    Currently this performs automatic white balance and HSV conversion. The
-    preprocessed RGB image is saved to ``logs`` when ``debug`` is ``True``.
-
-    Parameters
-    ----------
-    array:
-        Input RGB image as ``uint8`` numpy array.
-    config:
-        Optional configuration dictionary. Only ``runtime.debug_dir`` is used.
-    debug:
-        When ``True`` the preprocessed image is written to disk using the
-        ``save_image`` helper.
-    ts:
-        Optional timestamp prefix to use for the saved image filename.
-
-    Returns
-    -------
-    dict
-        Dictionary containing at least the preprocessed RGB image under the
-        ``"image"`` key and its HSV representation under ``"hsv"``.
-    """
-
-    # Crop the image to the region (left=36, upper=64, right=598, lower=480)
-    cropped = array[64:480, 36:598]
+) -> PreprocessOutput:
+    """Apply preprocessing and return the stage contract output."""
+    # Crop to tray interior before white balance.
+    cropped = stage_input.image[64:480, 36:598]
     processed = auto_white_balance(cropped)
-    # Convert to HSV color space using Pillow
-    hsv = np.asarray(PIL.Image.fromarray(processed).convert("HSV"))
-    debug = debug and config.get("processing", {}).get("debug_image", False)
-    save_image(processed, "pre", debug=debug, config=config, ts=ts)
-    return {"image": processed, "hsv": hsv}
+    debug = debug and stage_input.config.get("processing", {}).get("debug_image", False)
+    pre_path = save_image(
+        processed,
+        "pre",
+        debug=debug,
+        config=stage_input.config,
+        ts=ts,
+    )
+    return PreprocessOutput(
+        image=processed,
+        success=True,
+        _metadata={"debug_image_path": str(pre_path) if pre_path else None},
+    )
+    return output

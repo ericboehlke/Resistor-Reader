@@ -7,13 +7,14 @@ wrapper that orchestrates the helper utilities below.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+from typing import Tuple
 
 import cv2
 import numpy as np
 from scipy import ndimage
 
 from .logging_utils import save_image
+from .models import ErrorCodeEnum, RoIInput, RoIOutput
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -99,28 +100,49 @@ def _rotate_and_crop(
 
 
 def detect_resistor_roi(
-    artifacts: Dict[str, np.ndarray],
-    config: Dict[str, Any] | None = None,
+    stage_input: RoIInput,
     *,
     debug: bool = False,
     ts: str | None = None,
-) -> Dict[str, Any]:
-    """Return a rotated and cropped image of the resistor."""
+) -> RoIOutput:
+    """Return a rotated/cropped resistor image via stage contract."""
+    dbg = debug and stage_input.config.get("region_of_interest", {}).get(
+        "debug_image", False
+    )
 
-    config = config or {}
-    dbg = debug and config.get("region_of_interest", {}).get("debug_image", False)
-
-    image = artifacts["image"]
-    hsv = artifacts["hsv"]
+    image = stage_input.image
+    hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
 
     mask = _foreground_mask(hsv)
     mask = _remove_leads(mask, dist_thresh=15.0)
-    mask = _largest_component(mask)
+    try:
+        mask = _largest_component(mask)
+    except ValueError:
+        return RoIOutput(
+            image=image,
+            success=False,
+            _metadata={
+                "error_code": ErrorCodeEnum.E02.value,
+                "error_msg": "No resistor foreground component found.",
+            },
+        )
 
     crop, bbox = _rotate_and_crop(image, mask)
 
+    mask_path = None
+    roi_path = None
     if dbg:
-        save_image(mask * 255, "roi_mask", debug=True, config=config, ts=ts)
-        save_image(crop, "roi", debug=True, config=config, ts=ts)
+        mask_path = save_image(
+            mask * 255, "roi_mask", debug=True, config=stage_input.config, ts=ts
+        )
+        roi_path = save_image(crop, "roi", debug=True, config=stage_input.config, ts=ts)
 
-    return {"bbox": bbox, "crop": crop}
+    return RoIOutput(
+        image=crop,
+        success=True,
+        _metadata={
+            "bbox": bbox,
+            "debug_mask_path": str(mask_path) if mask_path else None,
+            "debug_roi_path": str(roi_path) if roi_path else None,
+        },
+    )

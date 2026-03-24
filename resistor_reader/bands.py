@@ -7,28 +7,37 @@ their color labels using simple color distance in LAB space.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
 from scipy.signal import find_peaks
 
 from .logging_utils import save_image
+from .models import (
+    BandBoundingBox,
+    ClassificationInput,
+    ClassificationOutput,
+    ColorsEnum,
+    ErrorCodeEnum,
+    SegmentationInput,
+    SegmentationOutput,
+)
 
 # Reference RGB colors for resistor bands
-COLOR_RGB: Dict[str, Tuple[int, int, int]] = {
-    "black": (0.193 * 255, 0.121 * 255, 0.092 * 255),
-    "brown": (0.421 * 255, 0.163 * 255, 0.130 * 255),
-    "red": (0.479 * 255, 0.114 * 255, 0.113 * 255),
-    "orange": (0.583 * 255, 0.235 * 255, 0.121 * 255),
-    "yellow": (0.485 * 255, 0.345 * 255, 0.093 * 255),
-    "green": (0.085 * 255, 0.170 * 255, 0.169 * 255),
-    "blue": (0.084 * 255, 0.146 * 255, 0.216 * 255),
-    "violet": (0.199 * 255, 0.163 * 255, 0.267 * 255),
-    "gray": (0.379 * 255, 0.305 * 255, 0.281 * 255),
-    "white": (0.510 * 255, 0.403 * 255, 0.356 * 255),
-    "gold": (0.472 * 255, 0.251 * 255, 0.154 * 255),
-    "silver": (192, 192, 192),
+COLOR_RGB: Dict[ColorsEnum, Tuple[int, int, int]] = {
+    ColorsEnum.BLACK: (0.193 * 255, 0.121 * 255, 0.092 * 255),
+    ColorsEnum.BROWN: (0.421 * 255, 0.163 * 255, 0.130 * 255),
+    ColorsEnum.RED: (0.479 * 255, 0.114 * 255, 0.113 * 255),
+    ColorsEnum.ORANGE: (0.583 * 255, 0.235 * 255, 0.121 * 255),
+    ColorsEnum.YELLOW: (0.485 * 255, 0.345 * 255, 0.093 * 255),
+    ColorsEnum.GREEN: (0.085 * 255, 0.170 * 255, 0.169 * 255),
+    ColorsEnum.BLUE: (0.084 * 255, 0.146 * 255, 0.216 * 255),
+    ColorsEnum.VIOLET: (0.199 * 255, 0.163 * 255, 0.267 * 255),
+    ColorsEnum.GRAY: (0.379 * 255, 0.305 * 255, 0.281 * 255),
+    ColorsEnum.WHITE: (0.510 * 255, 0.403 * 255, 0.356 * 255),
+    ColorsEnum.GOLD: (0.472 * 255, 0.251 * 255, 0.154 * 255),
+    ColorsEnum.SILVER: (192, 192, 192),
 }
 
 # Pre-compute LAB references for classification
@@ -37,7 +46,7 @@ _REF_LAB = {
     for name, rgb in COLOR_RGB.items()
 }
 
-_TOLERANCE_COLORS = {"gold", "silver"}
+_TOLERANCE_COLORS = {ColorsEnum.GOLD, ColorsEnum.SILVER}
 
 
 # --- helper for debug plotting without introducing new dependencies in your save_image
@@ -91,7 +100,7 @@ def _save_matplotlib_plot(
 
 
 def _segment_columns(image: np.ndarray, debug: bool = False) -> List[Tuple[int, int]]:
-    """Return ``(start, end)`` columns for the four color bands."""
+    """Return ``(start, end)`` column ranges for likely color bands."""
     lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
     col_means = lab.mean(axis=0)
     base = np.median(col_means, axis=0)
@@ -117,7 +126,7 @@ def _segment_columns(image: np.ndarray, debug: bool = False) -> List[Tuple[int, 
     return segments
 
 
-def _classify(segment: np.ndarray) -> str:
+def _classify(segment: np.ndarray) -> ColorsEnum:
     """Return color label for the given segment."""
     h = segment.shape[0]
     y0, y1 = int(h * 0.2), int(h * 0.8)
@@ -133,75 +142,63 @@ def _classify(segment: np.ndarray) -> str:
     return min(dists, key=dists.get)
 
 
-def segment_and_classify_bands(
-    roi: Dict[str, Any],
-    config: Dict[str, Any] | None = None,
+def segment_bands(
+    stage_input: SegmentationInput,
     *,
     debug: bool = False,
     ts: str | None = None,
-) -> List[str]:
-    """Return a list of four color labels for the resistor bands."""
-    config = config or {}
-    image: np.ndarray = roi["crop"]
-    segments = _segment_columns(image, debug=True)
-    labels = [_classify(image[:, s:e]) for s, e in segments]
+) -> SegmentationOutput:
+    """Locate four band bounding boxes in ROI image."""
+    image = stage_input.image
+    try:
+        segments = _segment_columns(image)
+    except ValueError as exc:
+        return SegmentationOutput(
+            bounding_boxes=[],
+            success=False,
+            _metadata={
+                "error_code": ErrorCodeEnum.E03.value,
+                "error_msg": str(exc),
+            },
+        )
 
-    # Canonical orientation: tolerance band should be last
-    flipped = False
-    if (
-        labels
-        and labels[0] in _TOLERANCE_COLORS
-        and labels[-1] not in _TOLERANCE_COLORS
-    ):
-        labels = labels[1:] + labels[:1]
-        segments = segments[1:] + segments[:1]
-        flipped = True
+    h = image.shape[0]
+    boxes: list[BandBoundingBox] = [(int(s), 0, int(e), int(h)) for s, e in segments]
+    success = len(boxes) == 4
+    metadata: dict[str, object] = {"raw_segments": segments}
+    if not success:
+        metadata["error_code"] = ErrorCodeEnum.E03.value
+        metadata["error_msg"] = f"Expected 4 bands, found {len(boxes)}"
 
-    dbg = debug and config.get("segmentation", {}).get("debug_image", False)
+    dbg = debug and stage_input.config.get("segmentation", {}).get("debug_image", False)
     if dbg:
-        # Upscale to fixed size for legibility
         target_w, target_h = 600, 400
         overlay = cv2.resize(
             image, (target_w, target_h), interpolation=cv2.INTER_NEAREST
         )
-
-        # Flip horizontally if needed
-        if flipped:
-            overlay = cv2.flip(overlay, 1)  # flip over y-axis
-
-        # Calculate scale ratios for coordinates
         h, w = image.shape[:2]
         scale_x = target_w / w
-        scale_y = target_h / h
-
         rect_th = 2
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.6
         text_th = 1
 
-        for (s, e), lbl in zip(segments, labels):
-            # Scale coordinates
+        for idx, (s, e) in enumerate(segments):
             s_up = int(s * scale_x)
             e_up = int(e * scale_x)
-            top_y = int(0 * scale_y)
-            bottom_y = int((h - 1) * scale_y)
-
-            # If flipped, adjust coordinates so bands line up with mirrored image
-            if flipped:
-                s_up, e_up = target_w - e_up, target_w - s_up
 
             cv2.rectangle(
                 overlay,
-                (s_up, top_y),
-                (e_up - 1, bottom_y),
+                (s_up, 0),
+                (e_up - 1, target_h - 1),
                 (0, 255, 0),
                 rect_th,
                 lineType=cv2.LINE_AA,
             )
             cv2.putText(
                 overlay,
-                lbl,
-                (s_up + 2, int(15 * scale_y)),
+                f"band_{idx + 1}",
+                (s_up + 2, 20),
                 font,
                 font_scale,
                 (255, 0, 0),
@@ -209,6 +206,107 @@ def segment_and_classify_bands(
                 cv2.LINE_AA,
             )
 
-        save_image(overlay, "bands", debug=True, config=config, ts=ts)
+        debug_path = save_image(
+            overlay, "segmentation", debug=True, config=stage_input.config, ts=ts
+        )
+        metadata["debug_image_path"] = str(debug_path) if debug_path else None
 
-    return labels
+    return SegmentationOutput(
+        bounding_boxes=boxes,
+        success=success,
+        _metadata=metadata,
+    )
+
+
+def classify_bands(
+    stage_input: ClassificationInput,
+    *,
+    debug: bool = False,
+    ts: str | None = None,
+) -> ClassificationOutput:
+    """Classify segmented bands using LAB nearest-reference matching."""
+    image = stage_input.image
+    boxes = stage_input.bounding_boxes
+    if len(boxes) != 4:
+        return ClassificationOutput(
+            colors=None,
+            success=False,
+            _metadata={
+                "error_code": ErrorCodeEnum.E03.value,
+                "error_msg": f"Expected 4 bounding boxes, found {len(boxes)}",
+            },
+        )
+
+    segments: list[tuple[int, int]] = []
+    colors: list[ColorsEnum] = []
+    for x0, y0, x1, y1 in boxes:
+        x0c, y0c = max(0, x0), max(0, y0)
+        x1c, y1c = min(image.shape[1], x1), min(image.shape[0], y1)
+        if x1c <= x0c or y1c <= y0c:
+            return ClassificationOutput(
+                colors=None,
+                success=False,
+                _metadata={
+                    "error_code": ErrorCodeEnum.E04.value,
+                    "error_msg": "Invalid bounding box dimensions.",
+                },
+            )
+        segment = image[y0c:y1c, x0c:x1c]
+        segments.append((x0c, x1c))
+        colors.append(_classify(segment))
+
+    # Canonical orientation: tolerance band should be last.
+    if colors[0] in _TOLERANCE_COLORS and colors[-1] not in _TOLERANCE_COLORS:
+        colors = colors[1:] + colors[:1]
+        segments = segments[1:] + segments[:1]
+
+    colors_tuple = (colors[0], colors[1], colors[2], colors[3])
+    metadata: dict[str, object] = {"segments": segments}
+
+    dbg = debug and stage_input.config.get("segmentation", {}).get("debug_image", False)
+    if dbg:
+        target_w, target_h = 600, 400
+        overlay = cv2.resize(
+            image, (target_w, target_h), interpolation=cv2.INTER_NEAREST
+        )
+        scale_x = target_w / image.shape[1]
+        rect_th = 2
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.6
+        text_th = 1
+        for (s, e), color in zip(segments, colors):
+            s_up = int(s * scale_x)
+            e_up = int(e * scale_x)
+            cv2.rectangle(
+                overlay,
+                (s_up, 0),
+                (e_up - 1, target_h - 1),
+                (0, 255, 0),
+                rect_th,
+                lineType=cv2.LINE_AA,
+            )
+            cv2.putText(
+                overlay,
+                color.value,
+                (s_up + 2, 20),
+                font,
+                font_scale,
+                (255, 0, 0),
+                text_th,
+                cv2.LINE_AA,
+            )
+
+        debug_path = save_image(
+            overlay,
+            "classification",
+            debug=True,
+            config=stage_input.config,
+            ts=ts,
+        )
+        metadata["debug_image_path"] = str(debug_path) if debug_path else None
+
+    return ClassificationOutput(
+        colors=colors_tuple,
+        success=True,
+        _metadata=metadata,
+    )

@@ -9,6 +9,7 @@ import yaml
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from resistor_reader import preprocess, roi
+from resistor_reader.models import PreprocessInput, RoIInput
 
 with open("tests/test.yaml", "r") as f:
     TEST_CONFIG = yaml.safe_load(f)
@@ -23,9 +24,11 @@ SAMPLES = [
 @pytest.mark.parametrize("fname", SAMPLES)
 def test_detect_roi(fname):
     array = np.asarray(PIL.Image.open(fname))
-    artifacts = preprocess.preprocess(array, TEST_CONFIG)
-    result = roi.detect_resistor_roi(artifacts, TEST_CONFIG)
-    crop = result["crop"]
+    pre_out = preprocess.preprocess(PreprocessInput(image=array, config=TEST_CONFIG))
+    assert pre_out.success
+    roi_out = roi.detect_resistor_roi(RoIInput(image=pre_out.image, config=TEST_CONFIG))
+    assert roi_out.success
+    crop = roi_out.image
     assert crop.ndim == 3
     assert crop.shape[0] > 0 and crop.shape[1] > 0
     assert crop.shape[1] > crop.shape[0]

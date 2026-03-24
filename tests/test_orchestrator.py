@@ -35,21 +35,20 @@ with open("tests/test.yaml", "r") as f:
 @pytest.mark.parametrize("fname,value", _load_cases())
 def test_resistors(fname, value):
     """Validate that each example image is parsed to the expected value."""
-    assert math.isclose(
-        orchestrator.read_resistor(numpy.asarray(PIL.Image.open(fname)), test_config),
-        value,
-    )
+    result = orchestrator.read_pipeline(numpy.asarray(PIL.Image.open(fname)), test_config)
+    assert result.failure is None
+    assert result.resistance is not None
+    assert math.isclose(result.resistance, value)
 
 
 def test_0():
     """Validate that each example image is parsed to the expected value."""
-    assert (
-        orchestrator.read_resistor(
-            numpy.asarray(PIL.Image.open(Path("resistor_pictures") / "0000.jpg")),
-            test_config,
-        )
-        == 100
+    result = orchestrator.read_pipeline(
+        numpy.asarray(PIL.Image.open(Path("resistor_pictures") / "0000.jpg")),
+        test_config,
     )
+    assert result.failure is None
+    assert result.resistance == 100
 
 
 if __name__ == "__main__":
