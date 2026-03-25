@@ -1,33 +1,24 @@
-camera:
-  device: 0
-  resolution: [640, 480]
-  exposure: "auto"   # or fixed value
-  white_balance: "auto"
-  debug_image: true
+# Pipeline tuning: only keys read by `resistor_reader` stages are kept here.
 
 processing:
-  work_width: 640
   debug_image: true
 
 region_of_interest:
   debug_image: true
 
 segmentation:
-  min_band_width_px: 6
   band_smooth_window: 9
+  min_band_width_px: 6
+  min_band_separation_px: 8
+  edge_margin: 4
+  max_band_width_ratio: 0.35
+  create_plot: false
   debug_image: true
 
 classification:
-  confidence_threshold: 0.65
   debug_image: true
 
 runtime:
-  timeout_ms: 900
   debug:
     enabled: true
-    timings: true
     dir: "logs/"
-  save_overlay: true
-
-display:
-  enabled: false     # set true when hardware connected

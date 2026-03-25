@@ -60,8 +60,8 @@ def _remove_leads(mask: np.ndarray, dist_thresh: float = 3.0) -> np.ndarray:
 
 def _rotate_and_crop(
     image: np.ndarray, mask: np.ndarray, pad: int = 8
-) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
-    """Rotate the image so the resistor is horizontal and return the tight crop."""
+) -> Tuple[np.ndarray, np.ndarray, Tuple[int, int, int, int]]:
+    """Rotate the image so the resistor is horizontal and return the tight crop and aligned mask."""
 
     pts = cv2.findNonZero(mask)
     rect = cv2.minAreaRect(pts)
@@ -79,7 +79,8 @@ def _rotate_and_crop(
     ys, xs = np.where(rotated_mask > 0)
     if ys.size == 0 or xs.size == 0:
         # Nothing in mask → return rotated full image and no bbox
-        return rotated_img, (0, 0, h, w)
+        empty_mask = np.zeros((h, w), dtype=np.uint8)
+        return rotated_img, empty_mask, (0, 0, h, w)
 
     y0, y1 = ys.min(), ys.max() + 1
     x0, x1 = xs.min(), xs.max() + 1
@@ -91,7 +92,8 @@ def _rotate_and_crop(
     x1 = min(w, x1 + pad)
 
     crop = rotated_img[y0:y1, x0:x1]
-    return crop, (y0, x0, y1, x1)
+    crop_mask = rotated_mask[y0:y1, x0:x1]
+    return crop, crop_mask, (y0, x0, y1, x1)
 
 
 # ---------------------------------------------------------------------------
@@ -121,13 +123,14 @@ def detect_resistor_roi(
         return RoIOutput(
             image=image,
             success=False,
+            body_mask=None,
             _metadata={
                 "error_code": ErrorCodeEnum.E02.value,
                 "error_msg": "No resistor foreground component found.",
             },
         )
 
-    crop, bbox = _rotate_and_crop(image, mask)
+    crop, crop_mask, bbox = _rotate_and_crop(image, mask)
 
     mask_path = None
     roi_path = None
@@ -140,6 +143,7 @@ def detect_resistor_roi(
     return RoIOutput(
         image=crop,
         success=True,
+        body_mask=(crop_mask * 255).astype(np.uint8),
         _metadata={
             "bbox": bbox,
             "debug_mask_path": str(mask_path) if mask_path else None,

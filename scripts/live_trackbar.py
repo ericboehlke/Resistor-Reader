@@ -63,6 +63,9 @@ TRACKBARS: list[tuple[str, tuple[str, ...], int, int]] = [
     ("cls_debug", ("classification", "debug_image"), 0, 1),
     ("seg_smooth", ("segmentation", "band_smooth_window"), 9, 31),
     ("seg_min_band", ("segmentation", "min_band_width_px"), 6, 30),
+    ("seg_min_sep", ("segmentation", "min_band_separation_px"), 8, 24),
+    ("seg_edge", ("segmentation", "edge_margin"), 0, 20),
+    ("seg_max_w", ("segmentation", "max_band_width_ratio"), 35, 80),
 ]
 
 
@@ -70,6 +73,9 @@ def _build_overrides() -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     for name, path, _, _ in TRACKBARS:
         val = cv2.getTrackbarPos(name, CONTROL_WINDOW)
+        if name == "seg_max_w":
+            _set_nested(overrides, path, val / 100.0)
+            continue
         if path[-1].endswith("debug") or path[-1] == "enabled" or path[-1] == "debug_image":
             _set_nested(overrides, path, _slider_to_bool(val))
         else:
@@ -90,7 +96,7 @@ def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, An
 def _init_trackbars(base_config: dict[str, Any]) -> None:
     cv2.namedWindow(CONTROL_WINDOW, cv2.WINDOW_NORMAL)
     cv2.namedWindow(PREVIEW_WINDOW, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(CONTROL_WINDOW, 360, 420)
+    cv2.resizeWindow(CONTROL_WINDOW, 360, 560)
     cv2.resizeWindow(PREVIEW_WINDOW, 900, 700)
     cv2.moveWindow(CONTROL_WINDOW, 30, 60)
     cv2.moveWindow(PREVIEW_WINDOW, 420, 60)
@@ -98,6 +104,11 @@ def _init_trackbars(base_config: dict[str, Any]) -> None:
         raw = _get_nested(base_config, path, default)
         if isinstance(raw, bool):
             initial = _bool_to_slider(raw)
+        elif name == "seg_max_w":
+            try:
+                initial = int(float(raw) * 100)
+            except Exception:
+                initial = int(default)
         else:
             try:
                 initial = int(raw)
@@ -112,6 +123,11 @@ def _reset_trackbars(base_config: dict[str, Any]) -> None:
         raw = _get_nested(base_config, path, default)
         if isinstance(raw, bool):
             val = _bool_to_slider(raw)
+        elif name == "seg_max_w":
+            try:
+                val = int(float(raw) * 100)
+            except Exception:
+                val = int(default)
         else:
             try:
                 val = int(raw)

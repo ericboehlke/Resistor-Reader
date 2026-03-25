@@ -79,12 +79,14 @@ class RoIInput:
 class RoIOutput:
     image: np.ndarray
     success: bool
+    body_mask: np.ndarray | None
     _metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class SegmentationInput:
     image: np.ndarray
+    body_mask: np.ndarray
     config: dict[str, Any]
 
 

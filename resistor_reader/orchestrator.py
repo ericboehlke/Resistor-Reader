@@ -145,8 +145,13 @@ def read_pipeline(
             metadata={"preprocess": pre_out._metadata, "roi": roi_out._metadata},
         )
 
+    assert roi_out.body_mask is not None
     seg_out = bands.segment_bands(
-        SegmentationInput(image=roi_out.image, config=config), debug=debug, ts=ts
+        SegmentationInput(
+            image=roi_out.image, body_mask=roi_out.body_mask, config=config
+        ),
+        debug=debug,
+        ts=ts,
     )
     if not seg_out.success:
         return _finalize_pipeline_result(

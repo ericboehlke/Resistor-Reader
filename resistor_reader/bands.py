@@ -7,7 +7,8 @@ their color labels using simple color distance in LAB space.
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -47,6 +48,26 @@ _REF_LAB = {
 }
 
 _TOLERANCE_COLORS = {ColorsEnum.GOLD, ColorsEnum.SILVER}
+
+
+def _segmentation_cfg(config: dict[str, Any]) -> dict[str, Any]:
+    seg = config.get("segmentation", {}) or {}
+    k = int(seg.get("band_smooth_window", 9))
+    if k % 2 == 0:
+        k += 1
+    k = max(1, k)
+    return {
+        "band_smooth_window": k,
+        "min_band_width_px": max(1, int(seg.get("min_band_width_px", 6))),
+        "min_band_separation_px": max(1, int(seg.get("min_band_separation_px", 8))),
+        "edge_margin": max(0, int(seg.get("edge_margin", 4))),
+        "max_band_width_ratio": float(seg.get("max_band_width_ratio", 0.35)),
+        "create_plot": bool(seg.get("create_plot", False)),
+    }
+
+
+def _debug_dir_from_config(config: dict[str, Any]) -> Path:
+    return Path(config.get("runtime", {}).get("debug", {}).get("dir", "logs"))
 
 
 # --- helper for debug plotting without introducing new dependencies in your save_image
@@ -99,31 +120,103 @@ def _save_matplotlib_plot(
     plt.close(fig)
 
 
-def _segment_columns(image: np.ndarray, debug: bool = False) -> List[Tuple[int, int]]:
-    """Return ``(start, end)`` column ranges for likely color bands."""
+def _segment_columns(
+    image: np.ndarray,
+    body_mask: np.ndarray,
+    cfg: dict[str, Any],
+) -> tuple[list[tuple[int, int]], dict[str, Any]]:
+    """Return column ranges ``(start, end)`` with ``end`` exclusive; plus debug arrays."""
+    h, w = image.shape[:2]
+    if body_mask.shape != (h, w):
+        raise ValueError("body_mask must match image H×W")
+    mask_bin = (body_mask > 0).astype(np.uint8)
+    col_sum = mask_bin.sum(axis=0)
+    valid = col_sum > 0
+    if not np.any(valid):
+        raise ValueError("empty body mask")
+    xs = np.where(valid)[0]
+    xl_raw, xr_raw = int(xs.min()), int(xs.max())
+    em = int(cfg["edge_margin"])
+    xl = xl_raw + em
+    xr = xr_raw - em
+    if xl >= xr:
+        raise ValueError("edge margin too large for body mask")
+
+    usable_width = xr - xl + 1
+    max_w = max(1, int(cfg["max_band_width_ratio"] * usable_width))
+    min_w = int(cfg["min_band_width_px"])
+
     lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
     col_means = lab.mean(axis=0)
-    base = np.median(col_means, axis=0)
-    dist = np.linalg.norm(col_means - base, axis=1)
-    dist_smooth = cv2.GaussianBlur(dist[None, :], (1, 9), 0).ravel()
-    peaks, _ = find_peaks(dist_smooth, distance=max(1, image.shape[1] // 20))
+    sub = col_means[xl : xr + 1]
+    base = np.median(sub, axis=0)
+    dist = np.zeros(w, dtype=np.float64)
+    dist[xl : xr + 1] = np.linalg.norm(col_means[xl : xr + 1] - base, axis=1)
+
+    ksz = int(cfg["band_smooth_window"])
+    dist_smooth = cv2.GaussianBlur(dist[None, :], (1, ksz), 0).ravel()
+
+    min_sep = int(cfg["min_band_separation_px"])
+    slice_smooth = dist_smooth[xl : xr + 1]
+    # Legacy spacing uses full ROI width (~w/20), not the masked usable span, so nearby
+    # peaks (e.g. 92 vs 99) are not both returned by find_peaks.
+    peak_dist = max(min_sep, max(1, w // 20))
+    peaks_rel, _ = find_peaks(slice_smooth, distance=peak_dist)
+    peaks = peaks_rel + xl
+
     if len(peaks) < 4:
         raise ValueError("unable to find four bands")
-    peak_vals = dist_smooth[peaks]
-    centers = np.sort(peaks[np.argsort(peak_vals)[-4:]])
-    segments: List[Tuple[int, int]] = []
+
+    # Ignore spurious peaks on rounded caps / shadow at body edges (still use mask xl/xr).
+    pin = max(em, min_sep * 2)
+    cand_mask = (peaks >= xl + pin) & (peaks <= xr - pin)
+    cand = peaks[cand_mask]
+    if len(cand) < 4:
+        cand = peaks
+
+    # Strongest four peaks among candidates, then left→right order.
+    peak_vals = dist_smooth[cand]
+    centers = np.sort(cand[np.argsort(peak_vals)[-4:]])
+
+    # Half-height expansion per peak; ``right`` is exclusive end index (matches legacy).
+    adjusted: list[tuple[int, int]] = []
     for c in centers:
-        val = dist_smooth[c]
-        left = c
-        while left > 0 and dist_smooth[left] > 0.5 * val:
+        val = float(dist_smooth[int(c)])
+        if val <= 0.0:
+            raise ValueError("invalid peak height")
+        left = int(c)
+        while left > xl and float(dist_smooth[left]) > 0.5 * val:
             left -= 1
-        right = c
-        w = dist_smooth.size - 1
-        while right < w and dist_smooth[right] > 0.5 * val:
+        right = int(c)
+        while right < xr and float(dist_smooth[right]) > 0.5 * val:
             right += 1
-        segments.append((int(left), int(right)))
-    segments.sort(key=lambda x: x[0])
-    return segments
+        adjusted.append((left, right))
+
+    adjusted.sort(key=lambda x: x[0])
+
+    # Enforce max width (shrink around peak center).
+    for i in range(4):
+        s, e = adjusted[i]
+        wseg = e - s
+        c = int(centers[i])
+        if wseg > max_w:
+            half = max_w // 2
+            ns = max(s, c - half)
+            ne = min(e, ns + max_w)
+            if ne - ns < wseg:
+                ns = max(xl, min(c - half, xr + 1 - max_w))
+                ne = min(xr + 1, ns + max_w)
+            s, e = ns, ne
+        adjusted[i] = (s, e)
+
+    debug_info: dict[str, Any] = {
+        "dist_smooth": dist_smooth,
+        "xl": xl,
+        "xr": xr,
+        "peaks_selected": np.asarray(centers, dtype=np.int32),
+        "min_band_width_px": min_w,
+    }
+    return adjusted, debug_info
 
 
 def _classify(segment: np.ndarray) -> ColorsEnum:
@@ -150,8 +243,10 @@ def segment_bands(
 ) -> SegmentationOutput:
     """Locate four band bounding boxes in ROI image."""
     image = stage_input.image
+    body_mask = stage_input.body_mask
+    cfg = _segmentation_cfg(stage_input.config)
     try:
-        segments = _segment_columns(image)
+        segments, dbg_cols = _segment_columns(image, body_mask, cfg)
     except ValueError as exc:
         return SegmentationOutput(
             bounding_boxes=[],
@@ -170,16 +265,14 @@ def segment_bands(
         metadata["error_code"] = ErrorCodeEnum.E03.value
         metadata["error_msg"] = f"Expected 4 bands, found {len(boxes)}"
 
-    dbg = debug and stage_input.config.get("classification", {}).get(
-        "debug_image", False
-    )
+    dbg = debug and stage_input.config.get("segmentation", {}).get("debug_image", False)
     if dbg:
         target_w, target_h = 600, 400
         overlay = cv2.resize(
             image, (target_w, target_h), interpolation=cv2.INTER_NEAREST
         )
-        h, w = image.shape[:2]
-        scale_x = target_w / w
+        h_img, w_img = image.shape[:2]
+        scale_x = target_w / w_img
         rect_th = 2
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_scale = 0.6
@@ -212,6 +305,32 @@ def segment_bands(
             overlay, "segmentation", debug=True, config=stage_input.config, ts=ts
         )
         metadata["debug_image_path"] = str(debug_path) if debug_path else None
+
+    plot_cfg = stage_input.config.get("segmentation", {}) or {}
+    if (
+        debug
+        and bool(plot_cfg.get("create_plot", False))
+        and ts is not None
+    ):
+        ds = dbg_cols["dist_smooth"]
+        xl = int(dbg_cols["xl"])
+        xr = int(dbg_cols["xr"])
+        plot_slice = ds[xl : xr + 1]
+        peaks = dbg_cols["peaks_selected"] - xl
+        plot_dir = _debug_dir_from_config(stage_input.config)
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plot_path = plot_dir / f"{ts}_segmentation_plot.png"
+        tw, th = min(600, image.shape[1]), min(400, image.shape[0])
+        small_img = cv2.resize(image, (tw, th))
+        _save_matplotlib_plot(
+            [(plot_slice, "dist_smooth")],
+            ["LAB distance (masked)"],
+            image=small_img,
+            peaks=peaks,
+            segments=[(s - xl, e - xl) for s, e in segments],
+            out_path=str(plot_path),
+        )
+        metadata["segmentation_plot_path"] = str(plot_path)
 
     return SegmentationOutput(
         bounding_boxes=boxes,
@@ -265,7 +384,7 @@ def classify_bands(
     colors_tuple = (colors[0], colors[1], colors[2], colors[3])
     metadata: dict[str, object] = {"segments": segments}
 
-    dbg = debug and stage_input.config.get("segmentation", {}).get("debug_image", False)
+    dbg = debug and stage_input.config.get("classification", {}).get("debug_image", False)
     if dbg:
         target_w, target_h = 600, 400
         overlay = cv2.resize(

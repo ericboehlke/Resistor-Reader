@@ -11,12 +11,15 @@ def make_roi(colors):
     positions = [10, 35, 60, 85]
     for x, name in zip(positions, colors):
         img[:, x : x + 10] = COLOR_RGB[ColorsEnum(name)]
-    return {"bbox": (0, 0, h, w), "crop": img}
+    mask = np.full((h, w), 255, dtype=np.uint8)
+    return {"bbox": (0, 0, h, w), "crop": img, "mask": mask}
 
 
 def test_segment_and_classify_bands_returns_colors():
     roi = make_roi(["brown", "black", "red", "gold"])
-    seg = segment_bands(SegmentationInput(image=roi["crop"], config={}))
+    seg = segment_bands(
+        SegmentationInput(image=roi["crop"], body_mask=roi["mask"], config={})
+    )
     assert seg.success
     cls = classify_bands(
         ClassificationInput(image=roi["crop"], bounding_boxes=seg.bounding_boxes, config={})
@@ -32,7 +35,9 @@ def test_segment_and_classify_bands_returns_colors():
 
 def test_segment_and_classify_bands_handles_tolerance_left():
     roi = make_roi(["gold", "brown", "black", "red"])
-    seg = segment_bands(SegmentationInput(image=roi["crop"], config={}))
+    seg = segment_bands(
+        SegmentationInput(image=roi["crop"], body_mask=roi["mask"], config={})
+    )
     assert seg.success
     cls = classify_bands(
         ClassificationInput(image=roi["crop"], bounding_boxes=seg.bounding_boxes, config={})

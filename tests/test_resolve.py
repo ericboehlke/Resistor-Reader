@@ -19,6 +19,7 @@ from resistor_reader.models import ColorsEnum, ErrorCodeEnum, ResolveInput
         ([ColorsEnum.BLUE, ColorsEnum.GRAY, ColorsEnum.BLACK, ColorsEnum.BROWN], 68),  # 68 Ω
         ([ColorsEnum.WHITE, ColorsEnum.WHITE, ColorsEnum.WHITE, ColorsEnum.GOLD], 99_000_000_000),  # 99 × 10^9 Ω
         ([ColorsEnum.BLACK, ColorsEnum.BLACK, ColorsEnum.BLACK, ColorsEnum.GOLD], 0),  # 0 Ω (valid code)
+        ([ColorsEnum.ORANGE, ColorsEnum.ORANGE, ColorsEnum.BLACK, ColorsEnum.GOLD], 33),  # 33 Ω
     ],
 )
 def test_resolve_value_basic(bands, expected):

@@ -10,10 +10,8 @@ import PIL.Image
 
 def _resolve_debug_dir(config: Dict[str, Any]) -> Path:
     runtime_cfg = config.get("runtime", {})
-    # Support both runtime.debug.dir and legacy runtime.debug_dir.
     nested = runtime_cfg.get("debug", {}).get("dir")
-    flat = runtime_cfg.get("debug_dir")
-    debug_dir_value = nested or flat or "logs"
+    debug_dir_value = nested or "logs"
     return Path(debug_dir_value)
 
 
@@ -36,7 +34,7 @@ def save_image(
     debug:
         When ``False`` no file is written and ``None`` is returned.
     config:
-        Optional configuration dictionary. ``runtime.debug_dir`` controls the
+        Optional configuration dictionary. ``runtime.debug.dir`` controls the
         destination directory. Defaults to ``"logs"``.
     ts:
         Optional timestamp string to prefix the filename. When omitted, the

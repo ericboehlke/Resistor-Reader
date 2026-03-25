@@ -29,6 +29,9 @@ def test_detect_roi(fname):
     roi_out = roi.detect_resistor_roi(RoIInput(image=pre_out.image, config=TEST_CONFIG))
     assert roi_out.success
     crop = roi_out.image
+    assert roi_out.body_mask is not None
+    assert roi_out.body_mask.shape == crop.shape[:2]
+    assert np.any(roi_out.body_mask > 0)
     assert crop.ndim == 3
     assert crop.shape[0] > 0 and crop.shape[1] > 0
     assert crop.shape[1] > crop.shape[0]
