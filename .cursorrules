@@ -17,5 +17,4 @@
 ## AI Instructions
 
 - Before writing code for a stage, provide a brief "Logic Plan" for approval.
-- If a change affects color detection, suggest how to test it using the "Live Trackbar" tool.
-- Always check for regressions: Ensure changes to one color don't break the "Tan" body detection.
+- Do not worry about backwards compatibility. The source of truth is the test_resistors test suite. We are aiming for 100% on this without cheating.

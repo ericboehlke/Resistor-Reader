@@ -17,6 +17,7 @@ segmentation:
 
 classification:
   debug_image: true
+  highlight_keep_percentile: 80.0
 
 runtime:
   debug:

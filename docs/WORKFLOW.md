@@ -23,6 +23,11 @@ These changes will make it easier to communicate with each other about problems 
 We need to create a guide to map pixels in the combined debug image into individual images for each
 stage of the pipeline so we can easily "crop" the debug image back into the stage outputs.
 
+## Pipeline config (stages)
+
+- **segmentation**: `band_smooth_window`, `min_band_width_px`, `min_band_separation_px`, `edge_margin`, `max_band_width_ratio`, `create_plot`, `debug_image`. Per-column LAB mean vs masked median baseline, then 1D Gaussian smooth and peak finding.
+- **classification**: `debug_image`, `highlight_keep_percentile` (keep pixels at or below this brightness percentile; median RGB on survivors reduces glare bias vs mean-of-all-pixels).
+
 ## Interactive Tuning
 
 To allow for interactive tuning and visualization of the pipeline we will implement a gui that allows us

@@ -91,12 +91,24 @@ def _best_debug_path(result) -> str:
     )
 
 
-def _append_report(rows: list[dict[str, str]], report_path: Path) -> None:
+def _append_report(
+    rows: list[dict[str, str]],
+    report_path: Path,
+    *,
+    total: int,
+    passed: int,
+    failed: int,
+) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.now().isoformat(timespec="seconds")
     commit = _short_commit_hash()
+    pct = (100.0 * passed / total) if total else 0.0
     with open(report_path, "w") as f:
-        f.write(f"# Test Failures\n\n")
+        f.write("# Test Failures\n\n")
+        f.write(f"- total: {total}\n")
+        f.write(f"- passed: {passed}\n")
+        f.write(f"- failed: {failed}\n")
+        f.write(f"- pass rate: {pct:.1f}%\n\n")
         f.write(f"- datetime: `{now}`\n")
         f.write(f"- commit: `{commit}`\n\n")
         f.write(
@@ -110,12 +122,14 @@ def _append_report(rows: list[dict[str, str]], report_path: Path) -> None:
 
 
 def test_resistors():
-    """Run all images, append markdown failure report, and fail if regressions remain."""
+    """Run all images, write markdown failure report with pass summary, and fail if regressions remain."""
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = Path("logs") / run_id
     report_path = run_dir / "test_failures.md"
     rows: list[dict[str, str]] = []
-    for fname, expected in _load_cases():
+    cases = _load_cases()
+    total = len(cases)
+    for fname, expected in cases:
         image_name = Path(fname).stem
         case_config = copy.deepcopy(test_config)
         case_config.setdefault("runtime", {}).setdefault("debug", {})["enabled"] = True
@@ -154,18 +168,10 @@ def test_resistors():
             }
         )
 
-    _append_report(rows, report_path)
+    failed = len(rows)
+    passed = total - failed
+    _append_report(rows, report_path, total=total, passed=passed, failed=failed)
     assert not rows, f"{len(rows)} failures logged to {report_path}"
-
-
-def test_0():
-    """Validate that each example image is parsed to the expected value."""
-    result = orchestrator.read_pipeline(
-        numpy.asarray(PIL.Image.open(Path("resistor_pictures") / "0000.jpg")),
-        test_config,
-    )
-    assert result.failure is None
-    assert result.resistance == 100
 
 
 if __name__ == "__main__":

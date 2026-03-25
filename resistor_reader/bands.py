@@ -66,6 +66,13 @@ def _segmentation_cfg(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _classification_cfg(config: dict[str, Any]) -> dict[str, Any]:
+    cls = config.get("classification", {}) or {}
+    p = float(cls.get("highlight_keep_percentile", 80.0))
+    p = max(0.0, min(100.0, p))
+    return {"highlight_keep_percentile": p}
+
+
 def _debug_dir_from_config(config: dict[str, Any]) -> Path:
     return Path(config.get("runtime", {}).get("debug", {}).get("dir", "logs"))
 
@@ -219,12 +226,25 @@ def _segment_columns(
     return adjusted, debug_info
 
 
-def _classify(segment: np.ndarray) -> ColorsEnum:
+def _classify(segment: np.ndarray, config: dict[str, Any]) -> ColorsEnum:
     """Return color label for the given segment."""
     h = segment.shape[0]
     y0, y1 = int(h * 0.2), int(h * 0.8)
     central = segment[y0:y1]
-    mean_rgb = central.mean(axis=(0, 1)).astype(np.uint8)
+    cfg = _classification_cfg(config)
+    p = float(cfg["highlight_keep_percentile"])
+    pixels = central.reshape(-1, 3).astype(np.float32)
+    if pixels.shape[0] == 0:
+        mean_rgb = np.zeros(3, dtype=np.uint8)
+    else:
+        brightness = pixels.mean(axis=1)
+        thr = float(np.percentile(brightness, p))
+        mask_hi = brightness <= thr
+        filtered = pixels[mask_hi]
+        if filtered.shape[0] < 10:
+            mean_rgb = central.mean(axis=(0, 1)).astype(np.uint8)
+        else:
+            mean_rgb = np.median(filtered, axis=0).astype(np.uint8)
     mean_lab = cv2.cvtColor(mean_rgb.reshape(1, 1, 3), cv2.COLOR_RGB2LAB)[0, 0].astype(
         np.float32
     )
@@ -374,7 +394,7 @@ def classify_bands(
             )
         segment = image[y0c:y1c, x0c:x1c]
         segments.append((x0c, x1c))
-        colors.append(_classify(segment))
+        colors.append(_classify(segment, stage_input.config))
 
     # Canonical orientation: tolerance band should be last.
     if colors[0] in _TOLERANCE_COLORS and colors[-1] not in _TOLERANCE_COLORS:
