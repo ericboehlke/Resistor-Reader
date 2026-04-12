@@ -364,3 +364,23 @@ def handle_error(code, context, debug, config) -> None: ...
 * **Maintainer:** Eric (default) across all agents for now.
 
 ---
+
+## Cursor Cloud specific instructions
+
+### Quick reference
+
+| Action | Command |
+|--------|---------|
+| Install deps | `uv sync` |
+| Lint | `ruff check .` |
+| Tests | `uv run pytest` |
+| Build | `uv build` |
+| Run pipeline on an image | `uv run python3 -c "import numpy, PIL.Image; from resistor_reader.orchestrator import read_resistor, load_config; print(read_resistor(numpy.asarray(PIL.Image.open('resistor_pictures/0000.jpg')), load_config('tests/test.yaml')))"` |
+
+### Notes
+
+- **uv** must be on `PATH`. It is installed to `~/.local/bin` by the setup script. If missing: `curl -LsSf https://astral.sh/uv/install.sh | sh` and add `~/.local/bin` to `PATH`.
+- **ruff** is installed as a uv tool (`uv tool install ruff`), not as a project dependency. Run it directly via `ruff check .` (not `uv run ruff`).
+- The `main.py` entry point (`python3 resistor_reader/main.py read`) requires Raspberry Pi hardware (GPIO, PiCamera2, I2C display). On dev machines, test the CV pipeline via `orchestrator.read_resistor()` or `uv run pytest`.
+- Many `test_orchestrator.py` parametrized cases are expected to fail — the pipeline is under active development and AGENTS.md states tests should never be deleted even if implementation doesn't yet support them.
+- Golden test images live in `resistor_pictures/` with ground truth in `resistor_pictures/resistors.csv`. Additional ROI test crops are in `tests/data/`.
