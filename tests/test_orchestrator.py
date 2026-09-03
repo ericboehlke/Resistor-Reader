@@ -1,6 +1,7 @@
 import csv
 import copy
 import math
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -27,7 +28,30 @@ def _load_cases():
             fname = Path("resistor_pictures") / f"{int(number):04d}.jpg"
             if fname.exists():
                 cases.append((str(fname), float(value)))
-    return cases
+    return _apply_split(cases)
+
+
+def _apply_split(cases):
+    """Optionally restrict the run to one half of the images.
+
+    Thresholds in the pipeline were tuned against these photos, so a pass rate
+    over all of them flatters itself.  Set ``RESISTOR_SPLIT=tune`` while tuning
+    and ``RESISTOR_SPLIT=holdout`` to read an honest generalization number.  The
+    split is by resistor *value*, not by file: every value is photographed
+    twice, so splitting on filename would leak one photo of a pair into the
+    other half.  Unset (the default) runs every image.
+    """
+    split = os.environ.get("RESISTOR_SPLIT", "").strip().lower()
+    if split not in {"tune", "holdout"}:
+        return cases
+    values = sorted({value for _, value in cases})
+    tune_values = set(values[0::2])
+    keep_tune = split == "tune"
+    return [
+        (fname, value)
+        for fname, value in cases
+        if (value in tune_values) == keep_tune
+    ]
 
 
 # Load test.yaml as a dictionary
@@ -171,7 +195,11 @@ def test_resistors():
     failed = len(rows)
     passed = total - failed
     _append_report(rows, report_path, total=total, passed=passed, failed=failed)
-    assert not rows, f"{len(rows)} failures logged to {report_path}"
+    pct = (100.0 * passed / total) if total else 0.0
+    assert not rows, (
+        f"{failed}/{total} failures ({pct:.1f}% pass rate); "
+        f"details in {report_path}"
+    )
 
 
 if __name__ == "__main__":

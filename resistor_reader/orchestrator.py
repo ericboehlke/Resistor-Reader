@@ -10,17 +10,17 @@ import cv2
 import numpy as np
 import yaml
 
-from . import bands, preprocess, resolve, roi
+from . import bands, decode, preprocess, roi
 from .debug_montage import build_debug_montage, render_final_overlay
 from .logging_utils import save_image
 from .models import (
     BandBoundingBox,
     ClassificationInput,
     ColorsEnum,
+    DecodeInput,
     ErrorCodeEnum,
     PipelineResult,
     PreprocessInput,
-    ResolveInput,
     RoIInput,
     SegmentationInput,
 )
@@ -177,6 +177,7 @@ def read_pipeline(
             image=roi_out.image,
             bounding_boxes=seg_out.bounding_boxes,
             config=config,
+            body_tex=float(seg_out._metadata.get("body_tex", 0.0)),
         ),
         debug=debug,
         ts=ts,
@@ -201,8 +202,12 @@ def read_pipeline(
             },
         )
 
-    res_out = resolve.resolve_value(ResolveInput(colors=cls_out.colors, config=config))
-    if not res_out.success or res_out.resistance is None:
+    scores = [
+        {ColorsEnum(name): value for name, value in band.items()}
+        for band in cls_out._metadata.get("scores", [])
+    ]
+    dec_out = decode.decode_best(DecodeInput(scores=scores, config=config))
+    if not dec_out.success or dec_out.resistance is None:
         return _finalize_pipeline_result(
             config=config,
             ts=ts,
@@ -210,7 +215,7 @@ def read_pipeline(
             preprocessed_image=pre_out.image,
             roi_image=roi_out.image,
             failure=ErrorCodeEnum.E04,
-            error_msg=str(res_out._metadata.get("error_msg", "Resolve failed.")),
+            error_msg=str(dec_out._metadata.get("error_msg", "Resolve failed.")),
             bounding_boxes=seg_out.bounding_boxes,
             colors=cls_out.colors,
             resistance=None,
@@ -219,10 +224,13 @@ def read_pipeline(
                 "roi": roi_out._metadata,
                 "segmentation": seg_out._metadata,
                 "classification": cls_out._metadata,
-                "resolve": res_out._metadata,
+                "resolve": dec_out._metadata,
             },
         )
 
+    boxes = seg_out.bounding_boxes
+    if dec_out.reversed_:
+        boxes = list(reversed(boxes))
     return _finalize_pipeline_result(
         config=config,
         ts=ts,
@@ -231,15 +239,16 @@ def read_pipeline(
         roi_image=roi_out.image,
         failure=None,
         error_msg="",
-        bounding_boxes=seg_out.bounding_boxes,
-        colors=cls_out.colors,
-        resistance=res_out.resistance,
+        bounding_boxes=boxes,
+        colors=dec_out.colors,
+        resistance=dec_out.resistance,
         metadata={
             "preprocess": pre_out._metadata,
             "roi": roi_out._metadata,
             "segmentation": seg_out._metadata,
             "classification": cls_out._metadata,
-            "resolve": res_out._metadata,
+            "resolve": dec_out._metadata,
+            "confidence": dec_out.confidence,
         },
     )
 

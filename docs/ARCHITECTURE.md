@@ -52,7 +52,8 @@ stage in the finished pipeline. For now we will keep them separate.
 
 The `orchestrator.py` has a function called `read_resistor` which is the entry point into the pipeline.
 It takes in an image as a numpy array and the configuration options and returns the resistance in ohms.
-To accomplish this, the function calls these stages in turn: preprocess, roi, bands, resolve.
+To accomplish this, the function calls these stages in turn: preprocess, roi, bands (segmentation then
+classification), and decode.
 
 In debug mode or if there is a failure, orchestrator should take all of the information from each stage
 and create a debug image which combines the pictures vertically to create a visual snapshot of the pipeline.
@@ -158,24 +159,40 @@ class RoIOutput:
 
 #### Segmenting and Classifying the Bands
 
-Segmentation and classification of the resistor bands happens in `bands.py`. Here the code converts the cropped
-image into LAB and tries to create a one dimensional signal so that a peak finding algorithm can identify the colored
-bands on the resistor. Once the peaks are identified as coordinates in the cropped image, the classification function
-can look at that part of the image and try to match it to the closest value in the reference image.
+Segmentation and classification of the resistor bands happens in `bands.py`.
 
-I believe this stage is where most of the problems are coming from. The conversion to a 1D signal and peak finding
-algorithm works for darker colors but struggles with lighter colors that match the tan resistor body too closely.
-This is where we might be able to tune the 1D signal better or may need to pivot to a different approach such as
-k-means clustering.
+Segmentation builds a one dimensional "bandness" signal across the body from two cues:
 
-This stage should also be split into two stages. Segmenting and classifying are significantly different responsibilities.
-Segmentation should take the cropped image and return the bounding box around each band. If segmentation results in !=4
+* **colour** -- LAB distance of each column from the resistor body colour, measured on a central horizontal
+  strip and averaged over only the darkest rows so specular blobs cannot drag it toward white;
+* **texture** -- the specular spread of each column, which is the only thing that makes a metallic gold band
+  stand out from the beige body it is printed on.
+
+Plain glare on the body sparkles exactly as hard as a metallic band, so the texture cue is gated on the
+*chroma of the highlight*: a metallic sparkle stays a saturated gold, a specular reflection off the body
+washes out to near-white. The texture contribution is also capped, so a gold band cannot tower over the
+others and drag the detection threshold up with it.
+
+Bands are then extracted as runs above a threshold. No single threshold works for every resistor -- a
+metallic band scores several times higher than a gray band next to the body -- so the code sweeps the
+threshold looking for one that yields exactly four runs, and when none does, it keeps the runs it did find
+and fills the rest by claiming the strongest peaks among the leftover columns. Filling never subdivides a
+run that was already found, which is what stops two boxes from landing on the same band.
+
+Classification returns a *score for every colour* on every band rather than a hard label. Alongside the LAB
+distance to each reference colour it adds a metallic term: gold and silver carry their identity in their
+sparkle, which the matte median that identifies every other colour deliberately throws away. Without that
+term a gold band is indistinguishable from brown, which was the single largest source of wrong readings.
+
+Segmenting and classifying are separate responsibilities and are separate stages.
+Segmentation takes the cropped image and returns the bounding box around each band. If segmentation results in !=4
 bands this is an error.
 
 ```python
 @dataclass
 class SegmentationInput:
     image: np.ndarray  # this is the cropped roi image
+    body_mask: np.ndarray
     config: dict[str, Any]
 
 @dataclass
@@ -185,8 +202,8 @@ class SegmentationOutput:
     _metadata: dict[str, Any]
 ```
 
-Classification should take a list of bounding box coordinates for each band and the cropped image and return a list of
-four strings with the proper colors.
+Classification takes a list of bounding box coordinates for each band and the cropped image and returns the top
+scoring colour per band, with the full score matrix in `_metadata["scores"]` for the decoder.
 
 ```python
 @dataclass
@@ -194,6 +211,7 @@ class ClassificationInput:
     image: np.ndarray  # this is the cropped roi image
     bounding_boxes: list[tuple[int, int, int, int]]
     config: dict[str, Any]
+    body_tex: float  # body specular spread, the metallic baseline
 
 @dataclass
 class ClassificationOutput:
@@ -202,38 +220,49 @@ class ClassificationOutput:
     _metadata: dict[str, Any]
 ```
 
-#### Resolving
+#### Decoding and Resolving
 
-The last stage in `resolve.py` takes an array of color bands and converts it too a resistance value in ohms. This
-method is fairly straight forward and will work if the rest of the pipeline does.
+`resolve.py` is a pure decoder: given four ordered colours it returns a resistance in ohms. It knows nothing
+about which end of the resistor is which.
+
+Choosing that order is `decode.py`'s job, and it is not a detail -- a resistor is as likely to be
+photographed tolerance-band-left as tolerance-band-right, and the colours are the only cue to which end is
+which. `decode_best` searches both band orders and the top few colour candidates per band, keeps only
+sequences that form a legal resistor code, and returns the best scoring one. The rules it applies are
+published standards rather than anything learned from the sample images:
+
+* the tolerance band is never black, orange, yellow or white (EIA-RS-279), so an end band confidently in
+  that set cannot be the tolerance end;
+* the first significant digit is never black -- there are no leading-zero resistors;
+* real parts come from the E24 preferred-value series (IEC 60063), applied as a bonus rather than a filter
+  so an unusual part still decodes;
+* the resulting value must be within a plausible range.
+
+It also returns a confidence -- the score margin over the best alternative value -- which the Pi can use to
+ask for a retry instead of displaying a reading it is unsure of.
 
 ```python
 @dataclass
-class ResolveInput:
-    image: np.ndarray  # this is the cropped roi image
-    bounding_boxes: list[tuple[int, int, int, int]]
+class DecodeInput:
+    scores: list[dict[ColorsEnum, float]]  # per-colour score per band, image order
     config: dict[str, Any]
 
 @dataclass
-class ResolveOutput:
-    image: np.ndarray
+class DecodeOutput:
+    resistance: float | None
+    colors: tuple[ColorsEnum, ColorsEnum, ColorsEnum, ColorsEnum] | None
+    reversed_: bool
+    confidence: float
     success: bool
     _metadata: dict[str, Any]
 ```
-
-### Error Handling
-
-Currently there is very little error handling. We need a system to communicate to the user that the scan
-failed and the reason for the failure. When an error is detected we should save as much log information
-as possible including the input image, version of software, configuration, and output images from each 
-stage. The current failure modes I see are:
 
 | Error Code | Reason | Stage |
 | --- | --- | --- |
 | E01 | camera failure | main |
 | E02 | no resistor found | roi |
 | E03 | too many/few bands found | segmentation |
-| E04 | invalid band set | resolve |
+| E04 | invalid band set | classification / decode |
 
 We need to determine if there are other failure modes and capture them as well.
 

@@ -102,6 +102,9 @@ class ClassificationInput:
     image: np.ndarray
     bounding_boxes: list[BandBoundingBox]
     config: dict[str, Any]
+    # Median specular spread of the bare resistor body, measured during
+    # segmentation.  Metallic bands are scored relative to it.
+    body_tex: float = 0.0
 
 
 @dataclass
@@ -120,5 +123,24 @@ class ResolveInput:
 @dataclass
 class ResolveOutput:
     resistance: float | None
+    success: bool
+    _metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class DecodeInput:
+    # One score per color, per band, in left-to-right image order.
+    scores: list[dict[ColorsEnum, float]]
+    config: dict[str, Any]
+
+
+@dataclass
+class DecodeOutput:
+    resistance: float | None
+    colors: BandColorTuple | None
+    # True when the winning sequence reads right-to-left in the image.
+    reversed_: bool
+    # Score margin over the best alternative resistance value.
+    confidence: float
     success: bool
     _metadata: dict[str, Any] = field(default_factory=dict)

@@ -61,19 +61,29 @@ TRACKBARS: list[tuple[str, tuple[str, ...], int, int]] = [
     ("roi_debug", ("region_of_interest", "debug_image"), 0, 1),
     ("seg_debug", ("segmentation", "debug_image"), 0, 1),
     ("cls_debug", ("classification", "debug_image"), 0, 1),
-    ("seg_smooth", ("segmentation", "band_smooth_window"), 9, 31),
-    ("seg_min_band", ("segmentation", "min_band_width_px"), 6, 30),
-    ("seg_min_sep", ("segmentation", "min_band_separation_px"), 8, 24),
-    ("seg_edge", ("segmentation", "edge_margin"), 0, 20),
+    ("seg_smooth", ("segmentation", "band_smooth_window"), 7, 31),
+    ("seg_min_band", ("segmentation", "min_band_width_px"), 5, 30),
+    ("seg_min_sep", ("segmentation", "min_band_separation_px"), 9, 24),
+    ("seg_edge", ("segmentation", "edge_margin"), 4, 20),
     ("seg_max_w", ("segmentation", "max_band_width_ratio"), 35, 80),
+    # Metallic-band cues: weight and ceiling of the specular texture term that
+    # makes gold bands visible against the beige body.
+    ("seg_tex_w", ("segmentation", "texture_weight"), 100, 300),
+    ("seg_tex_cap", ("segmentation", "texture_cap"), 25, 100),
+    ("seg_chroma_lo", ("segmentation", "chroma_gate_low"), 70, 200),
+    ("cls_metal_gain", ("classification", "metallic_gain"), 26, 80),
+    ("cls_metal_off", ("classification", "metallic_offset"), 34, 120),
 ]
+
+# Sliders are integers; these carry a real value scaled by 100.
+_PERCENT_TRACKBARS = {"seg_max_w", "seg_tex_w"}
 
 
 def _build_overrides() -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     for name, path, _, _ in TRACKBARS:
         val = cv2.getTrackbarPos(name, CONTROL_WINDOW)
-        if name == "seg_max_w":
+        if name in _PERCENT_TRACKBARS:
             _set_nested(overrides, path, val / 100.0)
             continue
         if path[-1].endswith("debug") or path[-1] == "enabled" or path[-1] == "debug_image":
