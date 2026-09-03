@@ -96,7 +96,7 @@ die()   { printf '%s✗ %s%s\n' "$RED" "$*" "$RESET" >&2; exit 1; }
 step "Preflight checks"
 [[ $EUID -eq 0 ]] || die "must run as root"
 [[ -f "$IMG" ]] || die "IMG not found: $IMG"
-need=(losetup parted partprobe e2fsck resize2fs truncate udevadm openssl blockdev sha256sum)
+need=(losetup parted partprobe e2fsck resize2fs truncate udevadm openssl blockdev sha256sum findmnt)
 [[ $IMG == *.xz ]] && need+=(xz)
 for t in "${need[@]}"; do
   command -v "$t" >/dev/null || die "missing required tool: $t"
@@ -157,7 +157,19 @@ cleanup() {
     mountpoint -q "$MNT" && umount "$MNT"
     [[ -d $MNT ]] && rmdir "$MNT"
   fi
-  [[ -n $LOOP ]] && losetup -d "$LOOP" 2>/dev/null
+  # The desktop's udisks2 auto-mounts p1/p2 in the file manager the moment the
+  # partitioned loop device appears. Those mounts hold the device open, so a
+  # plain `losetup -d` can only flag it for autoclear and it lingers in lsblk
+  # across runs. Drop any outside mount of our partitions before detaching.
+  if [[ -n $LOOP ]]; then
+    for part in "${LOOP}p"*; do
+      [[ -b $part ]] || continue
+      while read -r mp; do
+        [[ -n $mp ]] && umount "$mp" 2>/dev/null
+      done < <(findmnt -rno TARGET -S "$part")
+    done
+    losetup -d "$LOOP" 2>/dev/null
+  fi
 }
 trap cleanup EXIT
 
