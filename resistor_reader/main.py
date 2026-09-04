@@ -12,8 +12,8 @@ from typing import Any
 
 import board
 from adafruit_ht16k33 import segments
+from gpiozero import LED, Button
 from picamera2 import Picamera2
-from RPi import GPIO
 
 from resistor_reader import orchestrator
 from resistor_reader.display import resistance_str, show_error, show_message
@@ -57,12 +57,15 @@ def ensure_paths(config: Config):
             writer.writerow(["number", "resistance"])
 
 
-def setup_gpio(config: Config):
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(config.leds_pin, GPIO.OUT, initial=GPIO.LOW)
-    # Active-low button to ground; every mode waits on a FALLING edge and then
-    # reads LOW, so it must be an input with the pull-up engaged.
-    GPIO.setup(config.button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+def setup_gpio(config: Config) -> tuple[Button, LED]:
+    # Active-low button to ground, so pull_up=True: gpiozero reports it
+    # pressed when the pin reads LOW. gpiozero picks the lgpio backend on
+    # this Pi (RPi.GPIO's edge detection is broken on its kernel -- see
+    # wait_for_press's old docstring in git history -- but lgpio talks to the
+    # modern gpiochip interface directly, so edge waits work).
+    button = Button(config.button_pin, pull_up=True, bounce_time=0.03)
+    leds = LED(config.leds_pin)
+    return button, leds
 
 
 def setup_display():
@@ -100,7 +103,7 @@ def _converge_exposure(
     return int(exposure), float(gain)
 
 
-def setup_camera(config: Config):
+def setup_camera(config: Config, leds: LED):
     cam = Picamera2()
     config_obj = cam.create_still_configuration(main={"size": config.resolution})
     cam.configure(config_obj)
@@ -118,11 +121,11 @@ def setup_camera(config: Config):
     if config.exposure_time is not None:
         exposure, gain = config.exposure_time, config.analogue_gain
     else:
-        GPIO.output(config.leds_pin, True)
+        leds.on()
         try:
             exposure, gain = _converge_exposure(cam)
         finally:
-            GPIO.output(config.leds_pin, False)
+            leds.off()
         print(f"Calibrated exposure: {exposure} us at gain {gain:.2f}")
     cam.set_controls(
         {"AeEnable": False, "ExposureTime": exposure, "AnalogueGain": gain}
@@ -130,7 +133,7 @@ def setup_camera(config: Config):
     return cam
 
 
-def gather_mode(picam2, display, config: Config):
+def gather_mode(picam2, display, config: Config, button: Button, leds: LED):
     """Gather mode:
     Prompt for resistance, take picture, save image and resistance in CSV.
     """
@@ -144,11 +147,11 @@ def gather_mode(picam2, display, config: Config):
         return
     display.print(resistance_str(float(resistance)))
     filename = config.save_dir / f"{str(config.image_number).zfill(4)}.jpg"
-    GPIO.output(config.leds_pin, True)
+    leds.on()
     time.sleep(0.1)
     picam2.capture_file(str(filename))
     time.sleep(0.1)
-    GPIO.output(config.leds_pin, False)
+    leds.off()
     with open(config.csv_path, "a", newline="") as csvfile:
         writer = csv.writer(
             csvfile, delimiter=",", quotechar="|", quoting=csv.QUOTE_MINIMAL
@@ -158,7 +161,7 @@ def gather_mode(picam2, display, config: Config):
     config.image_number += 1
 
 
-def camera_mode(picam2, display, config: Config):
+def camera_mode(picam2, display, config: Config, button: Button, leds: LED):
     """Camera mode:
     Wait for button press, take picture, save with incrementing filename.
     """
@@ -166,101 +169,100 @@ def camera_mode(picam2, display, config: Config):
         config.image_number += 1
     display.print("PUSH")
     print("Ready: press the button to take a picture...")
-    GPIO.wait_for_edge(config.button_pin, GPIO.FALLING)
-    # Simple debounce
-    time.sleep(0.03)
-    if GPIO.input(config.button_pin) == GPIO.LOW:
-        print("Taking picture with flash...")
-        display.print("SNAP")
-        GPIO.output(config.leds_pin, True)
-        time.sleep(0.1)
-        picam2.capture_file(str(outfile))
-        time.sleep(0.1)
-        GPIO.output(config.leds_pin, False)
-        display.print("DONE")
-        print(f"Saved to {outfile.resolve()}")
+    button.wait_for_press()
+    print("Taking picture with flash...")
+    display.print("SNAP")
+    leds.on()
+    time.sleep(0.1)
+    picam2.capture_file(str(outfile))
+    time.sleep(0.1)
+    leds.off()
+    display.print("DONE")
+    print(f"Saved to {outfile.resolve()}")
     # Wait for release so we don't immediately retrigger
-    while GPIO.input(config.button_pin) == GPIO.LOW:
-        time.sleep(0.01)
+    button.wait_for_release()
 
 
-def read_mode(picam2, display, config: Config):
+def read_mode(picam2, display, config: Config, button: Button, leds: LED):
     """Read mode:
     Wait for button press, take a picture, run the pipeline, and show the
     resistance -- or the failing stage's error code -- on the display.
     """
-    GPIO.wait_for_edge(config.button_pin, GPIO.FALLING)
-    time.sleep(0.03)  # Simple debounce
-    if GPIO.input(config.button_pin) == GPIO.LOW:
-        print("Taking picture...")
-        display.print("READ")
-        GPIO.output(config.leds_pin, True)
-        time.sleep(0.1)
-        try:
-            img_array = picam2.capture_array("main")
-        except Exception as e:  # camera not ready, driver/I-O error
-            GPIO.output(config.leds_pin, False)
-            show_error(display, ErrorCodeEnum.E01, str(e))
-            time.sleep(2)
-            return
-        time.sleep(0.1)
-        GPIO.output(config.leds_pin, False)
+    button.wait_for_press()
+    print("Taking picture...")
+    display.print("READ")
+    leds.on()
+    time.sleep(0.1)
+    try:
+        img_array = picam2.capture_array("main")
+    except Exception as e:  # camera not ready, driver/I-O error
+        leds.off()
+        show_error(display, ErrorCodeEnum.E01, str(e))
+        time.sleep(2)
+        button.wait_for_release()
+        return
+    time.sleep(0.1)
+    leds.off()
 
-        print("Processing image...")
-        try:
-            result = orchestrator.read_pipeline(img_array, config.pipeline_config)
-        except Exception:  # a stage blew up instead of reporting failure
-            traceback.print_exc()
-            show_error(display, ErrorCodeEnum.E05, "pipeline crashed")
-            time.sleep(2)
-            return
+    print("Processing image...")
+    try:
+        result = orchestrator.read_pipeline(img_array, config.pipeline_config)
+    except Exception:  # a stage blew up instead of reporting failure
+        traceback.print_exc()
+        show_error(display, ErrorCodeEnum.E05, "pipeline crashed")
+        time.sleep(2)
+        button.wait_for_release()
+        return
 
-        if result.failure is not None or result.resistance is None:
-            show_error(display, result.failure or ErrorCodeEnum.E04, result.error_msg)
-            time.sleep(2)
-            return
+    if result.failure is not None or result.resistance is None:
+        show_error(display, result.failure or ErrorCodeEnum.E04, result.error_msg)
+        time.sleep(2)
+        button.wait_for_release()
+        return
 
-        # A wrong reading is worse than no reading, so refuse a value the
-        # decoder could not separate from its runner-up.
-        if not orchestrator.is_confident(result, config.min_confidence):
-            show_error(
-                display,
-                ErrorCodeEnum.E06,
-                f"margin {result.confidence:.1f} < {config.min_confidence:.1f}",
-            )
-            time.sleep(2)
-            return
-
-        colors = ", ".join(c.value for c in result.colors) if result.colors else "?"
-        timings = result._metadata.get("timings_ms", {})
-        total_ms = sum(timings.values())
-        print(
-            f"Detected resistance: {result.resistance:g} ohms [{colors}] "
-            f"in {total_ms:.0f} ms (confidence {result.confidence:.1f})"
+    # A wrong reading is worse than no reading, so refuse a value the
+    # decoder could not separate from its runner-up.
+    if not orchestrator.is_confident(result, config.min_confidence):
+        show_error(
+            display,
+            ErrorCodeEnum.E06,
+            f"margin {result.confidence:.1f} < {config.min_confidence:.1f}",
         )
-        show_message(display, resistance_str(result.resistance))
+        time.sleep(2)
+        button.wait_for_release()
+        return
+
+    colors = ", ".join(c.value for c in result.colors) if result.colors else "?"
+    timings = result._metadata.get("timings_ms", {})
+    total_ms = sum(timings.values())
+    print(
+        f"Detected resistance: {result.resistance:g} ohms [{colors}] "
+        f"in {total_ms:.0f} ms (confidence {result.confidence:.1f})"
+    )
+    show_message(display, resistance_str(result.resistance))
     # Wait for release so we don't immediately retrigger
-    while GPIO.input(config.button_pin) == GPIO.LOW:
-        time.sleep(0.01)
+    button.wait_for_release()
 
 
 def run_loop(mode_func, config: Config):
     config.image_number = config.start_number
     display = None
     picam2 = None
+    button = None
+    leds = None
     try:
         display = setup_display()
         display.print("LOAD")
-        setup_gpio(config)
+        button, leds = setup_gpio(config)
         try:
-            picam2 = setup_camera(config)
+            picam2 = setup_camera(config, leds)
         except Exception as e:  # no camera attached, driver failure
             print(f"Camera initialization failed: {e}")
             show_error(display, ErrorCodeEnum.E01, str(e))
             time.sleep(3)
             raise
         while True:
-            mode_func(picam2, display, config)
+            mode_func(picam2, display, config, button, leds)
     except KeyboardInterrupt:
         pass
     finally:
@@ -270,7 +272,10 @@ def run_loop(mode_func, config: Config):
                 picam2.close()
             except Exception:
                 pass
-        GPIO.cleanup()
+        if button is not None:
+            button.close()
+        if leds is not None:
+            leds.close()
         if display is not None:
             try:
                 display.fill(0)
