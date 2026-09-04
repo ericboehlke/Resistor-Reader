@@ -29,6 +29,10 @@ class Config:
     save_dir: Path = Path("resistor_pictures")
     csv_path: Path = Path("resistor_pictures/resistors.csv")
     start_number: int = 0
+    # Fixed exposure for the (unchanging) tray lighting. ``None`` means measure
+    # it once at startup; see ``setup_camera``.
+    exposure_time: int | None = None
+    analogue_gain: float = 1.0
     # Loaded once at startup rather than re-read from disk on every capture.
     pipeline_config: dict[str, Any] = field(default_factory=dict)
     image_number: int = 0
@@ -56,6 +60,9 @@ def ensure_paths(config: Config):
 def setup_gpio(config: Config):
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(config.leds_pin, GPIO.OUT, initial=GPIO.LOW)
+    # Active-low button to ground; every mode waits on a FALLING edge and then
+    # reads LOW, so it must be an input with the pull-up engaged.
+    GPIO.setup(config.button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 
 def setup_display():
@@ -65,20 +72,60 @@ def setup_display():
     return display
 
 
+def _converge_exposure(
+    cam, *, min_frames: int = 4, max_frames: int = 40, tol: float = 0.03
+):
+    """Step through frames until auto-exposure settles, and return the
+    ``(ExposureTime microseconds, AnalogueGain)`` to lock in.
+
+    With the LEDs on and steady, the AEC/AGC parks within a couple of frames
+    and stays put; the hunting only happens when it meters a dark frame after
+    the LEDs switch off between reads, which is exactly what locking prevents.
+    ``capture_metadata`` blocks for the next frame, so the loop advances one
+    frame per iteration.
+    """
+    prev = None
+    exposure = gain = None
+    for i in range(max_frames):
+        metadata = cam.capture_metadata()
+        exposure = metadata.get("ExposureTime")
+        gain = metadata.get("AnalogueGain")
+        if exposure is None or gain is None:
+            break
+        if i + 1 >= min_frames and prev and abs(exposure - prev) <= tol * prev:
+            break
+        prev = exposure
+    if not exposure or not gain:
+        raise RuntimeError("camera gave no exposure metadata to calibrate from")
+    return int(exposure), float(gain)
+
+
 def setup_camera(config: Config):
     cam = Picamera2()
     config_obj = cam.create_still_configuration(main={"size": config.resolution})
     cam.configure(config_obj)
-
-    # Start camera, then set manual WB (disable AWB, apply gains)
     cam.start()
-    # small warmup
-    time.sleep(0.1)
+
+    # Manual white balance: the tray lighting is fixed, so a hunting AWB only
+    # adds colour drift between reads.
+    cam.set_controls({"AwbEnable": False, "ColourGains": config.awb_gains})
+
+    # Lock exposure too. Left on auto, the AGC hunts to its ceiling after the
+    # first frame and blows every later capture out -- red reads as orange,
+    # brown as gold, or the resistor is lost against the background. The
+    # lighting never changes, so one measurement under the LEDs holds for the
+    # whole session.
+    if config.exposure_time is not None:
+        exposure, gain = config.exposure_time, config.analogue_gain
+    else:
+        GPIO.output(config.leds_pin, True)
+        try:
+            exposure, gain = _converge_exposure(cam)
+        finally:
+            GPIO.output(config.leds_pin, False)
+        print(f"Calibrated exposure: {exposure} us at gain {gain:.2f}")
     cam.set_controls(
-        {
-            "AwbEnable": False,  # turn off auto white balance
-            "ColourGains": config.awb_gains,  # apply manual gains
-        }
+        {"AeEnable": False, "ExposureTime": exposure, "AnalogueGain": gain}
     )
     return cam
 
@@ -261,6 +308,18 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--awb-gains", type=str, default="1.5,1.4", help='AWB gains as "red,blue"'
         )
+        sp.add_argument(
+            "--exposure-time",
+            type=int,
+            default=None,
+            help="Lock exposure to N microseconds (default: measure it at startup)",
+        )
+        sp.add_argument(
+            "--analogue-gain",
+            type=float,
+            default=1.0,
+            help="Analogue gain to pair with --exposure-time",
+        )
 
     parser_gather = subparsers.add_parser("gather", help="Gather mode")
     add_common_args(parser_gather)
@@ -311,6 +370,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         save_dir=save_dir,
         csv_path=Path(csv_path) if csv_path else save_dir / "resistors.csv",
         start_number=getattr(args, "start_number", 0),
+        exposure_time=args.exposure_time,
+        analogue_gain=args.analogue_gain,
         pipeline_config=orchestrator.load_config(
             getattr(args, "pipeline_config_file", None)
         ),
