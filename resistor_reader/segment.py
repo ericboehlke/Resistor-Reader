@@ -1,54 +1,27 @@
-"""Band segmentation and color classification.
+"""Band segmentation: find the four colour bands on a cropped resistor.
 
-The resistor is assumed to be already cropped and aligned horizontally.
-Segmentation builds a per-column "bandness" profile from two cues -- distance
-from the resistor body color, and excess specular texture -- then extracts the
-four bands as connected runs above an adaptive threshold, falling back to
-greedy peak claiming for bands the threshold misses.  Classification
-returns a score for every color rather than a hard label, so the decoder in
-``decode.py`` can search over color hypotheses.
+The resistor is assumed to be already cropped and aligned horizontally.  A
+per-column "bandness" profile is built from two cues -- distance from the
+resistor body colour, and excess specular texture -- and the four bands are
+extracted as connected runs above an adaptive threshold, falling back to greedy
+peak claiming for bands the threshold misses.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
 
+from .imageops import annotate_bands, matte_mean, strip_bounds
 from .logging_utils import save_image
 from .models import (
     BandBoundingBox,
-    ClassificationInput,
-    ClassificationOutput,
-    ColorsEnum,
     ErrorCodeEnum,
     SegmentationInput,
     SegmentationOutput,
 )
-
-# Reference RGB colors for resistor bands
-COLOR_RGB: Dict[ColorsEnum, Tuple[int, int, int]] = {
-    ColorsEnum.BLACK: (0.193 * 255, 0.121 * 255, 0.092 * 255),
-    ColorsEnum.BROWN: (0.421 * 255, 0.163 * 255, 0.130 * 255),
-    ColorsEnum.RED: (0.479 * 255, 0.114 * 255, 0.113 * 255),
-    ColorsEnum.ORANGE: (0.583 * 255, 0.235 * 255, 0.121 * 255),
-    ColorsEnum.YELLOW: (0.485 * 255, 0.345 * 255, 0.093 * 255),
-    ColorsEnum.GREEN: (0.085 * 255, 0.170 * 255, 0.169 * 255),
-    ColorsEnum.BLUE: (0.084 * 255, 0.146 * 255, 0.216 * 255),
-    ColorsEnum.VIOLET: (0.199 * 255, 0.163 * 255, 0.267 * 255),
-    ColorsEnum.GRAY: (0.379 * 255, 0.305 * 255, 0.281 * 255),
-    ColorsEnum.WHITE: (0.510 * 255, 0.403 * 255, 0.356 * 255),
-    ColorsEnum.GOLD: (0.472 * 255, 0.251 * 255, 0.154 * 255),
-    ColorsEnum.SILVER: (192, 192, 192),
-}
-
-# Pre-compute LAB references for classification
-_REF_LAB = {
-    name: cv2.cvtColor(np.uint8([[rgb]]), cv2.COLOR_RGB2LAB)[0, 0].astype(np.float32)
-    for name, rgb in COLOR_RGB.items()
-}
 
 
 def _segmentation_cfg(config: dict[str, Any]) -> dict[str, Any]:
@@ -82,99 +55,6 @@ def _segmentation_cfg(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _classification_cfg(config: dict[str, Any]) -> dict[str, Any]:
-    cls = config.get("classification", {}) or {}
-    return {
-        "strip_top": float(cls.get("strip_top", 0.25)),
-        "strip_bottom": float(cls.get("strip_bottom", 0.75)),
-        "matte_keep_ratio": float(cls.get("matte_keep_ratio", 0.70)),
-        "metallic_gain": float(cls.get("metallic_gain", 26.0)),
-        "metallic_offset": float(cls.get("metallic_offset", 34.0)),
-        "metallic_scale": float(cls.get("metallic_scale", 22.0)),
-        "metallic_min_value": float(cls.get("metallic_min_value", 70.0)),
-        "highlight_ratio": float(cls.get("highlight_ratio", 0.15)),
-        "chroma_gate_low": float(cls.get("chroma_gate_low", 70.0)),
-        "chroma_gate_high": float(cls.get("chroma_gate_high", 110.0)),
-        "metallic_max_hue": float(cls.get("metallic_max_hue", 28.0)),
-        "silver_max_sat": float(cls.get("silver_max_sat", 70.0)),
-    }
-
-
-def _debug_dir_from_config(config: dict[str, Any]) -> Path:
-    return Path(config.get("runtime", {}).get("debug", {}).get("dir", "logs"))
-
-
-def _save_matplotlib_plot(
-    curves,
-    titles,
-    image=None,
-    peaks=None,
-    segments=None,
-    threshold=None,
-    out_path="segmentation_debug.png",
-):
-    """Save a stacked plot of the segmentation profile for interactive tuning.
-
-    curves: list of (y_values, label) where y_values is 1D numpy array
-    titles: list of subtitles for each curve panel
-    image:  optional RGB image to show at top
-    peaks:  optional 1D array of marker x positions on the last curve
-    segments: optional list of (L, R) to shade on the last curve
-    threshold: optional y value to draw as a horizontal line on the last curve
-    """
-    import matplotlib.pyplot as plt  # lazy import
-
-    n_rows = 1 + len(curves) if image is not None else len(curves)
-    fig = plt.figure(figsize=(10, 2.2 * n_rows), dpi=150)
-
-    row = 1
-    if image is not None:
-        ax = fig.add_subplot(n_rows, 1, row)
-        ax.imshow(image)
-        ax.set_title("Input (debug view)")
-        ax.axis("off")
-        row += 1
-
-    for (y, label), title in zip(curves, titles):
-        ax = fig.add_subplot(n_rows, 1, row)
-        ax.plot(y)
-        ax.set_xlim(0, len(y) - 1)
-        ax.grid(True, alpha=0.25)
-        ax.set_title(title)
-        if row == n_rows:
-            if segments is not None:
-                for L, R in segments:
-                    ax.axvspan(L, R, alpha=0.2, color="tab:orange")
-            if threshold is not None:
-                ax.axhline(threshold, color="tab:green", ls="--", lw=1, label="threshold")
-            if peaks is not None and len(peaks):
-                ax.scatter(peaks, y[peaks], s=20, color="tab:red", zorder=3, label="centers")
-            ax.legend(loc="upper right")
-        row += 1
-
-    fig.tight_layout()
-    fig.savefig(out_path, bbox_inches="tight")
-    plt.close(fig)
-
-
-# ---------------------------------------------------------------------------
-# Segmentation
-# ---------------------------------------------------------------------------
-
-
-def _strip_bounds(height: int, top: float, bottom: float) -> tuple[int, int]:
-    y0 = int(height * top)
-    y1 = int(height * bottom)
-    if y1 - y0 < 3:
-        y0, y1 = 0, height
-    return y0, y1
-
-
-def _matte_mean(values: np.ndarray, order: np.ndarray) -> np.ndarray:
-    """Mean over the rows selected by ``order`` for each column."""
-    return np.take_along_axis(values, order, axis=0).mean(axis=0)
-
-
 def _band_profile(
     image: np.ndarray, body_mask: np.ndarray, cfg: dict[str, Any]
 ) -> dict[str, Any]:
@@ -193,7 +73,7 @@ def _band_profile(
     if xl >= xr:
         raise ValueError("edge margin too large for body mask")
 
-    y0, y1 = _strip_bounds(h, cfg["strip_top"], cfg["strip_bottom"])
+    y0, y1 = strip_bounds(h, cfg["strip_top"], cfg["strip_bottom"])
     lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB).astype(np.float32)[y0:y1]
     sat = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(np.float32)[y0:y1, :, 1]
     lum = lab[:, :, 0]
@@ -203,7 +83,7 @@ def _band_profile(
     # every band and would otherwise drag the mean toward white.
     keep = max(1, round(cfg["matte_keep_ratio"] * rows))
     order = np.argsort(lum, axis=0)
-    prof = np.stack([_matte_mean(lab[:, :, c], order[:keep]) for c in range(3)], axis=1)
+    prof = np.stack([matte_mean(lab[:, :, c], order[:keep]) for c in range(3)], axis=1)
 
     # Texture: metallic (gold/silver) bands sparkle, matte bands do not.  Plain
     # body glare sparkles just as hard, so gate the texture on the highlight
@@ -211,7 +91,7 @@ def _band_profile(
     # reflection off the beige body washes out to near-white.
     tex = np.percentile(lum, 92, axis=0) - np.percentile(lum, 50, axis=0)
     n_hi = max(1, round(cfg["highlight_ratio"] * rows))
-    sat_hi = _matte_mean(sat, order[-n_hi:])
+    sat_hi = matte_mean(sat, order[-n_hi:])
     gate = np.clip(
         (sat_hi - cfg["chroma_gate_low"])
         / max(1e-6, cfg["chroma_gate_high"] - cfg["chroma_gate_low"]),
@@ -445,74 +325,6 @@ def _segment_columns(
     return capped, debug_info
 
 
-# ---------------------------------------------------------------------------
-# Classification
-# ---------------------------------------------------------------------------
-
-
-def _band_scores(
-    segment: np.ndarray, body_tex: float, cfg: dict[str, Any]
-) -> tuple[dict[ColorsEnum, float], dict[str, float]]:
-    """Return a score per color (higher is better) plus the raw band features."""
-    h = segment.shape[0]
-    y0, y1 = _strip_bounds(h, cfg["strip_top"], cfg["strip_bottom"])
-    central = segment[y0:y1]
-    pixels = central.reshape(-1, 3)
-    if pixels.shape[0] == 0:
-        pixels = segment.reshape(-1, 3)
-
-    px = pixels.reshape(-1, 1, 3).astype(np.uint8)
-    lab = cv2.cvtColor(px, cv2.COLOR_RGB2LAB).reshape(-1, 3).astype(np.float32)
-    hsv = cv2.cvtColor(px, cv2.COLOR_RGB2HSV).reshape(-1, 3).astype(np.float32)
-    hue, sat, val = hsv[:, 0], hsv[:, 1], hsv[:, 2]
-
-    order = np.argsort(val)
-    keep = max(1, round(cfg["matte_keep_ratio"] * len(val)))
-    mean_lab = np.median(lab[order[:keep]], axis=0)
-
-    n_hi = max(1, round(cfg["highlight_ratio"] * len(val)))
-    sat_hi = float(np.mean(sat[order[-n_hi:]]))
-    gate = float(
-        np.clip(
-            (sat_hi - cfg["chroma_gate_low"])
-            / max(1e-6, cfg["chroma_gate_high"] - cfg["chroma_gate_low"]),
-            0.0,
-            1.0,
-        )
-    )
-    features = {
-        "spread": gate * float(np.percentile(val, 95) - np.percentile(val, 50)),
-        "sat_hi": sat_hi,
-        "hue": float(np.median(hue)),
-        "sat": float(np.median(sat)),
-        "value": float(np.median(val)),
-    }
-
-    scores = {
-        name: -float(np.linalg.norm(mean_lab - ref)) for name, ref in _REF_LAB.items()
-    }
-
-    # Metallic cue.  Gold and silver carry their identity in the specular
-    # sparkle, which the matte median above deliberately discards; without this
-    # term a gold band is indistinguishable from brown.
-    excess = features["spread"] - body_tex - cfg["metallic_offset"]
-    metallic = cfg["metallic_gain"] * float(
-        np.clip(excess / cfg["metallic_scale"], -1.0, 1.0)
-    )
-    bright = features["value"] >= cfg["metallic_min_value"]
-    warm = features["hue"] <= cfg["metallic_max_hue"] or features["hue"] >= 170.0
-    if bright and warm:
-        scores[ColorsEnum.GOLD] += metallic
-    else:
-        scores[ColorsEnum.GOLD] -= abs(metallic)
-    if bright and features["sat"] <= cfg["silver_max_sat"]:
-        scores[ColorsEnum.SILVER] += metallic
-    else:
-        scores[ColorsEnum.SILVER] -= abs(metallic)
-
-    return scores, features
-
-
 def segment_bands(
     stage_input: SegmentationInput,
     *,
@@ -541,33 +353,13 @@ def segment_bands(
     overlay: np.ndarray | None = None
     dbg = debug and stage_input.config.get("segmentation", {}).get("debug_image", False)
     if dbg:
-        overlay = _annotate(
+        overlay = annotate_bands(
             image, segments, [f"band_{i + 1}" for i in range(len(segments))]
         )
         debug_path = save_image(
             overlay, "segmentation", debug=True, config=stage_input.config, ts=ts
         )
         metadata["debug_image_path"] = str(debug_path) if debug_path else None
-
-    plot_cfg = stage_input.config.get("segmentation", {}) or {}
-    if debug and bool(plot_cfg.get("create_plot", False)) and ts is not None:
-        sig = dbg_cols["signal"]
-        xl = int(dbg_cols["xl"])
-        xr = int(dbg_cols["xr"])
-        plot_dir = _debug_dir_from_config(stage_input.config)
-        plot_dir.mkdir(parents=True, exist_ok=True)
-        plot_path = plot_dir / f"{ts}_segmentation_plot.png"
-        tw, th = min(600, image.shape[1]), min(400, image.shape[0])
-        _save_matplotlib_plot(
-            [(sig[xl : xr + 1], "bandness")],
-            ["LAB distance from body + specular texture"],
-            image=cv2.resize(image, (tw, th)),
-            peaks=dbg_cols["peaks_selected"] - xl,
-            segments=[(s - xl, e - xl) for s, e in segments],
-            threshold=dbg_cols["threshold"],
-            out_path=str(plot_path),
-        )
-        metadata["segmentation_plot_path"] = str(plot_path)
 
     return SegmentationOutput(
         bounding_boxes=boxes,
@@ -576,93 +368,3 @@ def segment_bands(
         _metadata=metadata,
     )
 
-
-def _annotate(
-    image: np.ndarray, segments: list[tuple[int, int]], labels: list[str]
-) -> np.ndarray:
-    """Return an upscaled copy of ``image`` with labelled band rectangles."""
-    target_w, target_h = 600, 400
-    overlay = cv2.resize(image, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
-    scale_x = target_w / image.shape[1]
-    for (s, e), label in zip(segments, labels):
-        s_up, e_up = int(s * scale_x), int(e * scale_x)
-        cv2.rectangle(
-            overlay,
-            (s_up, 0),
-            (e_up - 1, target_h - 1),
-            (0, 255, 0),
-            2,
-            lineType=cv2.LINE_AA,
-        )
-        cv2.putText(
-            overlay,
-            label,
-            (s_up + 2, 20),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 0, 255),
-            1,
-            cv2.LINE_AA,
-        )
-    return overlay
-
-
-def classify_bands(
-    stage_input: ClassificationInput,
-    *,
-    debug: bool = False,
-    ts: str | None = None,
-) -> ClassificationOutput:
-    """Score each band against every reference color.
-
-    Returns one score per color per band, in left-to-right image order.  No hard
-    label and no orientation fix is applied here -- ``decode.decode_best``
-    chooses both the band order and the labels from the full score matrix
-    together with the resistor color code rules.
-    """
-    image = stage_input.image
-    boxes = stage_input.bounding_boxes
-    if len(boxes) != 4:
-        return ClassificationOutput(
-            error=ErrorCodeEnum.E03,
-            error_msg=f"Expected 4 bounding boxes, found {len(boxes)}",
-        )
-
-    cfg = _classification_cfg(stage_input.config)
-    body_tex = float(stage_input.body_tex)
-
-    segments: list[tuple[int, int]] = []
-    scores: list[dict[ColorsEnum, float]] = []
-    features: list[dict[str, float]] = []
-    for x0, y0, x1, y1 in boxes:
-        x0c, y0c = max(0, x0), max(0, y0)
-        x1c, y1c = min(image.shape[1], x1), min(image.shape[0], y1)
-        if x1c <= x0c or y1c <= y0c:
-            return ClassificationOutput(
-                error=ErrorCodeEnum.E04,
-                error_msg="Invalid bounding box dimensions.",
-            )
-        band_scores, band_feats = _band_scores(image[y0c:y1c, x0c:x1c], body_tex, cfg)
-        segments.append((x0c, x1c))
-        scores.append(band_scores)
-        features.append(band_feats)
-
-    metadata: dict[str, object] = {"segments": segments, "features": features}
-
-    overlay: np.ndarray | None = None
-    dbg = debug and stage_input.config.get("classification", {}).get(
-        "debug_image", False
-    )
-    if dbg:
-        # The arg-max label is the decoder's starting point, not its answer, but
-        # it is the useful thing to draw on a debug overlay.
-        labels = [max(s, key=s.get).value for s in scores]
-        overlay = _annotate(image, segments, labels)
-        debug_path = save_image(
-            overlay, "classification", debug=True, config=stage_input.config, ts=ts
-        )
-        metadata["debug_image_path"] = str(debug_path) if debug_path else None
-
-    return ClassificationOutput(
-        scores=scores, debug_overlay=overlay, _metadata=metadata
-    )

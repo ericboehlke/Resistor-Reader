@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Appliance entry point: button, camera, pipeline, segment display."""
 
 from __future__ import annotations
@@ -12,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import board
-import RPi.GPIO as GPIO
 from adafruit_ht16k33 import segments
 from picamera2 import Picamera2
+from RPi import GPIO
 
 from resistor_reader import orchestrator
 from resistor_reader.display import resistance_str, show_error, show_message

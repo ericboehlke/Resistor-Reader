@@ -56,7 +56,6 @@ segmentation:
   edge_margin: 4
   end_pin_ratio: 0.04
   upsample: 4
-  create_plot: false
   debug_image: true
 
 classification:

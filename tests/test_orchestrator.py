@@ -135,10 +135,7 @@ def _append_report(
             "| filename | failed stage | error message | segmentation bounding boxes (optional) | classification colors (optional) | resistance (optional) | debug image path |\n"
         )
         f.write("| --- | --- | --- | --- | --- | --- | --- |\n")
-        for row in rows:
-            f.write(
-                f"| {row['filename']} | {row['failed_stage']} | {row['error_message']} | {row['segmentation_bounding_boxes']} | {row['classification_colors']} | {row['resistance']} | {row['debug_image_path']} |\n"
-            )
+        f.writelines(f"| {row['filename']} | {row['failed_stage']} | {row['error_message']} | {row['segmentation_bounding_boxes']} | {row['classification_colors']} | {row['resistance']} | {row['debug_image_path']} |\n" for row in rows)
 
 
 def test_resistors():

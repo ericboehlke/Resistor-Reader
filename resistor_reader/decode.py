@@ -1,6 +1,6 @@
 """Constrained decoding of band color scores into a resistance value.
 
-``bands.classify_bands`` produces a score for every color on every band instead
+``classify.classify_bands`` produces a score for every color on every band instead
 of a hard label.  This module searches over band order and the top few color
 candidates per band, keeps only sequences that form a legal 4-band resistor
 code, and returns the best-scoring one.
@@ -18,8 +18,9 @@ band colors themselves are the only cue to which end is which:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from itertools import product
-from typing import Any, Iterable
+from typing import Any
 
 from .models import (
     BandColorTuple,

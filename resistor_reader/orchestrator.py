@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import yaml
 
-from . import bands, decode, preprocess, roi
+from . import classify, decode, preprocess, roi, segment
 from .debug_montage import build_debug_montage, render_final_overlay
 from .logging_utils import save_image
 from .models import (
@@ -159,7 +159,7 @@ def read_pipeline(
 
     seg_out = timed(
         "segmentation",
-        lambda: bands.segment_bands(
+        lambda: segment.segment_bands(
             SegmentationInput(
                 image=roi_out.image, body_mask=roi_out.body_mask, config=config
             ),
@@ -174,7 +174,7 @@ def read_pipeline(
 
     cls_out = timed(
         "classification",
-        lambda: bands.classify_bands(
+        lambda: classify.classify_bands(
             ClassificationInput(
                 image=roi_out.image,
                 bounding_boxes=seg_out.bounding_boxes,

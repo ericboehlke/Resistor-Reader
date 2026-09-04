@@ -7,7 +7,9 @@ name = "resistor_reader"
 version = "0.1.0"
 description = "A project to read the color code on resistors"
 readme = "README.md"
-requires-python = ">=3.8"
+# Raspberry Pi OS Bookworm ships Python 3.11. The code uses PEP 604 unions at
+# runtime and dataclass kw_only, so 3.10 is the hard floor regardless.
+requires-python = ">=3.11"
 dependencies = [
     "pyyaml",
     "Pillow",
@@ -15,9 +17,26 @@ dependencies = [
     "opencv-python",
 ]
 
-[tool.uv]
-dev-dependencies = ["pytest"]
+[project.scripts]
+# Only runnable on the Pi: main.py imports board/RPi.GPIO/picamera2.
+resistor-reader = "resistor_reader.main:main"
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 88
 lint.extend-select = ["I"]
+lint.ignore = [
+    # The read loop must survive a dead display, a wedged camera and a failed
+    # GPIO cleanup; every blind except here is deliberate and commented.
+    "BLE001",
+    "S110",
+    # Debug filenames and log directories are named in the appliance's local
+    # time on purpose -- it has no timezone configured and the names are read
+    # by a human next to the machine.
+    "DTZ005",
+]
