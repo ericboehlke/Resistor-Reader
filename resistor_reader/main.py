@@ -3,6 +3,7 @@
 import argparse
 import csv
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from adafruit_ht16k33 import segments
 from picamera2 import Picamera2
 
 from resistor_reader import orchestrator
+from resistor_reader.models import ErrorCodeEnum
 
 
 @dataclass
@@ -70,13 +72,43 @@ def setup_camera(config: Config):
 
 
 def resistance_str(value):
-    """Format a resistance value as a string with appropriate units."""
+    """Format a resistance value to fit the 4-character display.
+
+    Keeps three significant figures at most so values like 10 kOhm render as
+    ``10.0k`` rather than overflowing the four digits.
+    """
     if value >= 1_000_000:
-        return f"{value / 1_000_000:.2f}M"
+        scaled, suffix = value / 1_000_000, "M"
     elif value >= 1_000:
-        return f"{value / 1_000:.2f}k"
+        scaled, suffix = value / 1_000, "k"
     else:
-        return f"{value:.2f}"
+        scaled, suffix = float(value), ""
+    if scaled >= 100:
+        body = f"{scaled:.0f}"
+    elif scaled >= 10:
+        body = f"{scaled:.1f}"
+    else:
+        body = f"{scaled:.2f}"
+    return f"{body}{suffix}"
+
+
+def show_message(display, text: str) -> None:
+    """Write to the segment display without ever taking the loop down with it."""
+    try:
+        display.print(text)
+    except Exception:
+        try:
+            display.fill(0)
+            display.print(text[:4])
+        except Exception:
+            pass
+
+
+def show_error(display, code: ErrorCodeEnum, detail: str = "") -> None:
+    """Report a failure on the console and surface its code on the display."""
+    reason = f"{code.value}: {detail}" if detail else code.value
+    print(f"[{code.name}] {reason}")
+    show_message(display, code.name)
 
 
 def gather_mode(picam2, display, config: Config):
@@ -135,7 +167,8 @@ def camera_mode(picam2, display, config: Config):
 
 def read_mode(picam2, display, config: Config):
     """Read mode:
-    Wait for button press, take picture, display image on screen.
+    Wait for button press, take a picture, run the pipeline, and show the
+    resistance -- or the failing stage's error code -- on the display.
     """
     GPIO.wait_for_edge(config.BUTTON_PIN, GPIO.FALLING)
     time.sleep(0.03)  # Simple debounce
@@ -144,24 +177,42 @@ def read_mode(picam2, display, config: Config):
         display.print("READ")
         GPIO.output(config.LEDS_PIN, True)
         time.sleep(0.1)
-        img_array = picam2.capture_array("main")
-        time.sleep(0.1)
-        GPIO.output(config.LEDS_PIN, False)
-        print("Processing image...")
         try:
-            pipeline_config = (
-                orchestrator.load_config(config.PIPELINE_CONFIG_FILE)
-                if config.PIPELINE_CONFIG_FILE
-                else None
-            )
-            resistance = orchestrator.read_resistor(img_array, pipeline_config)
-        except ValueError as e:
-            print(f"Error reading resistor: {e}")
-            display.print("Err")
+            img_array = picam2.capture_array("main")
+        except Exception as e:  # camera not ready, driver/I-O error
+            GPIO.output(config.LEDS_PIN, False)
+            show_error(display, ErrorCodeEnum.E01, str(e))
             time.sleep(2)
             return
-        print(f"Detected resistance: {resistance} ohms")
-        display.print(resistance_str(resistance))
+        time.sleep(0.1)
+        GPIO.output(config.LEDS_PIN, False)
+
+        print("Processing image...")
+        pipeline_config = orchestrator.load_config(
+            config.PIPELINE_CONFIG_FILE or None
+        )
+        try:
+            result = orchestrator.read_pipeline(img_array, pipeline_config)
+        except Exception:  # a stage blew up instead of reporting failure
+            traceback.print_exc()
+            show_error(display, ErrorCodeEnum.E02, "pipeline crashed")
+            time.sleep(2)
+            return
+
+        if result.failure is not None or result.resistance is None:
+            show_error(
+                display,
+                result.failure or ErrorCodeEnum.E04,
+                result.error_msg,
+            )
+            time.sleep(2)
+            return
+
+        colors = (
+            ", ".join(c.value for c in result.colors) if result.colors else "?"
+        )
+        print(f"Detected resistance: {result.resistance:g} ohms [{colors}]")
+        show_message(display, resistance_str(result.resistance))
     # Wait for release so we don't immediately retrigger
     while GPIO.input(config.BUTTON_PIN) == GPIO.LOW:
         time.sleep(0.01)
@@ -169,23 +220,36 @@ def read_mode(picam2, display, config: Config):
 
 def run_loop(mode_func, config: Config):
     config.image_number = config.START_NUMBER
+    display = None
+    picam2 = None
     try:
         display = setup_display()
         display.print("LOAD")
         setup_gpio(config)
-        picam2 = setup_camera(config)
+        try:
+            picam2 = setup_camera(config)
+        except Exception as e:  # no camera attached, driver failure
+            print(f"Camera initialization failed: {e}")
+            show_error(display, ErrorCodeEnum.E01, str(e))
+            time.sleep(3)
+            raise
         while True:
             mode_func(picam2, display, config)
     except KeyboardInterrupt:
         pass
     finally:
-        try:
-            picam2.stop()
-            picam2.close()
-        except Exception:
-            pass
+        if picam2 is not None:
+            try:
+                picam2.stop()
+                picam2.close()
+            except Exception:
+                pass
         GPIO.cleanup()
-        display.fill(0)
+        if display is not None:
+            try:
+                display.fill(0)
+            except Exception:
+                pass
 
 
 def main():
