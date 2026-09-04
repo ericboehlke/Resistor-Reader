@@ -74,7 +74,7 @@ REPO=${REPO:-https://github.com/ericboehlke/Resistor-Reader.git}
 APT_PKGS=(
   git python3-pip
   python3-rpi.gpio python3-picamera2 python3-opencv
-  python3-pil python3-scipy python3-yaml python3-pytest
+  python3-pil python3-yaml python3-pytest
   i2c-tools
 )
 # No build-essential / python3-dev: the venv pip step installs only pure-Python
