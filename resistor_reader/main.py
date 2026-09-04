@@ -58,12 +58,14 @@ def ensure_paths(config: Config):
 
 
 def setup_gpio(config: Config) -> tuple[Button, LED]:
-    # Active-low button to ground, so pull_up=True: gpiozero reports it
-    # pressed when the pin reads LOW. gpiozero picks the lgpio backend on
-    # this Pi (RPi.GPIO's edge detection is broken on its kernel -- see
-    # wait_for_press's old docstring in git history -- but lgpio talks to the
-    # modern gpiochip interface directly, so edge waits work).
-    button = Button(config.button_pin, pull_up=True, bounce_time=0.03)
+    # The switch ties the GPIO pin to 3.3V (not GND) when pressed -- see
+    # hardware/WIRING.md -- so pull_up=False: gpiozero enables the internal
+    # pull-down and reports the button pressed when the pin reads HIGH.
+    # gpiozero picks the lgpio backend on this Pi (RPi.GPIO's edge detection
+    # is broken on its kernel -- see wait_for_press's old docstring in git
+    # history -- but lgpio talks to the modern gpiochip interface directly,
+    # so edge waits work).
+    button = Button(config.button_pin, pull_up=False, bounce_time=0.03)
     leds = LED(config.leds_pin)
     return button, leds
 
