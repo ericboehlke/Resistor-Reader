@@ -10,6 +10,7 @@ than having no file at all.
   contract, the error codes. Read this first.
 * [docs/WORKFLOW.md](docs/WORKFLOW.md) — testing, tuning, configuration.
 * [docs/CODE_REVIEW_TODO.md](docs/CODE_REVIEW_TODO.md) — the open work list.
+* [hardware/WIRING.md](hardware/WIRING.md) — enclosure, GPIO wiring, fasteners.
 
 ## Commands
 

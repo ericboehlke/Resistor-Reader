@@ -11,6 +11,7 @@ Currently reads **121 of 128** sample images correctly (94.5%). Only tan-bodied
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pipeline works
 * [docs/WORKFLOW.md](docs/WORKFLOW.md) — how to develop and tune it
 * [docs/CODE_REVIEW_TODO.md](docs/CODE_REVIEW_TODO.md) — what still needs doing
+* [hardware/WIRING.md](hardware/WIRING.md) — enclosure, GPIO wiring, and fasteners
 
 ## Development
 
