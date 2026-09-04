@@ -12,7 +12,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from .logging_utils import save_image
+from .image_log import save_image
 from .models import ErrorCodeEnum, RoIInput, RoIOutput
 
 # ---------------------------------------------------------------------------

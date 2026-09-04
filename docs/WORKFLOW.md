@@ -1,39 +1,85 @@
 # Development Workflow
 
-This document describes the development workflow to work on this project.
+## Setup
 
-## Testing
+```bash
+uv sync          # dependencies
+uv run pytest    # the whole suite
+uvx ruff check . # lint (clean; keep it that way)
+```
 
-The tests can be run using `uv run pytest`. This runs the whole suite of tests.
-The `test_resistors` test case in `test_orchestrator.py` runs through all of the pictures
-in the `resistor_pictures/` directory. These pictures were gathered with the `gather` mode
-so they are paired with known resistance values in `resistor_pictures/resistors.csv`.
+Everything runs on a dev machine except `main.py`, which imports `board`,
+`RPi.GPIO` and `picamera2` and only works on the Pi. Exercise the pipeline with
+`orchestrator.read_pipeline` or the test suite instead.
 
-We need to change `test_resistors` so that it outputs a summary of all of the failures.
-The test case should return a markdown document with the date and time, commit hash, and a
-table with every failed test case. The table should have the following format.
+## The regression suite
 
-| filename | failed stage | error message | segmentation bounding boxes (optional) | classification colors (optional) | resistance (optional) | debug image path |
-| --- | --- | --- | --- | --- | --- | --- |
-| 0000.jpg | result | incorrect resistance | [segmentation coords] | red, green, orange, gold | 100 Ohms | debug/0000_debug.jpg |
+`test_resistors` in `tests/test_orchestrator.py` runs every photo in
+`resistor_pictures/` against the known values in `resistor_pictures/resistors.csv`
+(gathered with `main.py gather`). It is the source of truth for accuracy — 121
+of 128 as of this writing.
 
-We can append to the markdown file each test run to create a running log of progress and to easily identify regressions.
+Each run writes `logs/<timestamp>/test_failures.md`: a table of every failure
+with the stage that failed, the error, the decoded colours, and a path to the
+most useful debug image. Images that pass are run once with debug off; only
+failures are re-run with debug on, so a clean run stays fast and does not fill
+`logs/`.
 
-These changes will make it easier to communicate with each other about problems in the pipeline.
-We need to create a guide to map pixels in the combined debug image into individual images for each
-stage of the pipeline so we can easily "crop" the debug image back into the stage outputs.
+The report is one file per run, not a running log across runs — use git if you
+want history.
 
-## Pipeline config (stages)
+### Honest accuracy numbers
 
-- **segmentation**: `band_smooth_window`, `min_band_width_px`, `min_band_separation_px`, `edge_margin`, `max_band_width_ratio`, `create_plot`, `debug_image`. Per-column LAB mean vs masked median baseline, then 1D Gaussian smooth and peak finding.
-- **classification**: `debug_image`, `highlight_keep_percentile` (keep pixels at or below this brightness percentile; median RGB on survivors reduces glare bias vs mean-of-all-pixels).
+The thresholds were tuned against these photos, so a pass rate over all of them
+flatters itself. `RESISTOR_SPLIT` cuts the set in half **by resistor value**
+(every value was photographed twice, so splitting by filename would leak one
+photo of a pair into the other half):
 
-## Interactive Tuning
+```bash
+RESISTOR_SPLIT=tune    uv run pytest    # tune against this half
+RESISTOR_SPLIT=holdout uv run pytest    # then read the honest number here
+```
 
-To allow for interactive tuning and visualization of the pipeline we will implement a gui that allows us
-to adjust variables with slider bars, called trackbars in opencv. Here is a tutorial describing the process.
-https://docs.opencv.org/3.4/da/d6a/tutorial_trackbar.html
+Unset runs everything. Currently 95.3% tune / 93.8% holdout.
 
-The trackbars should edit values that get passed into each stage with the config dictionary.
-We will likely need to create another file defining the gui and trackbars but we should reuse orchestrator
-so that the code is the same as will be run by the application.
+## Interactive tuning
+
+`scripts/live_trackbar.py` reruns the whole pipeline on one image as you drag
+sliders, showing the debug montage live. It calls the same `read_pipeline` the
+appliance does, so what you tune is what runs.
+
+```bash
+uv run python scripts/live_trackbar.py \
+  --image resistor_pictures/0044.jpg --debug --save-config tuned.yaml
+```
+
+Keys: `s` saves the current values to `--save-config`, `r` resets to the file's
+values, `q` or Escape quits.
+
+The sliders are integers, so `seg_max_w` and `seg_tex_w` carry their real value
+scaled by 100. Adding a slider means adding a row to `TRACKBARS` and, for a
+fractional parameter, to `_PERCENT_TRACKBARS`.
+
+## Configuration
+
+One file, `config.yaml`, holds every tunable, and it is what the appliance runs.
+Tests load it and force the debug switches in code — there is deliberately no
+second copy of the tunables under `tests/`, because a second copy only drifts.
+
+Debug is **off** by default: `logs/` on the appliance is a Log2Ram RAM disk, and
+each enabled stage writes a JPEG per button press. `runtime.debug.max_files`
+caps the directory when it is on.
+
+Note that stage defaults currently live in two places — `config.yaml` and the
+`_*_cfg()` fallbacks in each stage — so a key typo silently falls back to the
+code default. See [CODE_REVIEW_TODO.md](CODE_REVIEW_TODO.md).
+
+## Conventions
+
+* Every stage takes an input dataclass and returns an output dataclass; see the
+  stage contract in [ARCHITECTURE.md](ARCHITECTURE.md).
+* A stage names its own failure with an `ErrorCodeEnum`. Do not add a code
+  without adding it to the table in ARCHITECTURE.md.
+* `_metadata` is for diagnostics. If the next stage needs it, it is a field.
+* Performance matters: the target is under a third of a second on a Pi Zero.
+  Vectorize with NumPy/OpenCV; no Python loops over pixels, no ML frameworks.

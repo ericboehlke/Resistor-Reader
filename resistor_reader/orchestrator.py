@@ -14,7 +14,7 @@ import yaml
 
 from . import classify, decode, preprocess, roi, segment
 from .debug_montage import build_debug_montage, render_final_overlay
-from .logging_utils import save_image
+from .image_log import save_image
 from .models import (
     BandBoundingBox,
     BandColorTuple,

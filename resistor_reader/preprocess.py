@@ -5,7 +5,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from .logging_utils import save_image
+from .image_log import save_image
 from .models import ErrorCodeEnum, PreprocessInput, PreprocessOutput
 
 # Tray interior for the appliance's 640x480 capture: everything outside is the

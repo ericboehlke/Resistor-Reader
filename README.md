@@ -1,62 +1,74 @@
 # Resistor-Reader
 
-A project to read the color code on resistors
+Press a button, and a Raspberry Pi Zero photographs the 4-band resistor sitting
+on its tray, decodes the colour code with OpenCV, and shows the resistance on a
+14-segment display. Fixed LEDs keep the lighting consistent; a failure shows an
+error code instead of a wrong answer.
+
+Currently reads **121 of 128** sample images correctly (94.5%). Only tan-bodied
+4-band resistors are in scope.
+
+* [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pipeline works
+* [docs/WORKFLOW.md](docs/WORKFLOW.md) — how to develop and tune it
+* [docs/CODE_REVIEW_TODO.md](docs/CODE_REVIEW_TODO.md) — what still needs doing
 
 ## Development
 
-This project uses [uv](https://github.com/astral-sh/uv) for dependency
-management and [flit](https://flit.pypa.io) as the build backend.
-
-Install the dependencies:
+Uses [uv](https://github.com/astral-sh/uv) for dependencies and
+[flit](https://flit.pypa.io) as the build backend. Needs Python 3.11+.
 
 ```bash
-uv sync
+uv sync            # install
+uv run pytest      # run the tests
+uvx ruff check .   # lint
+uv build           # build a distribution
 ```
 
-Run the tests:
+The CV pipeline runs anywhere. `main.py` needs the Pi's hardware (GPIO,
+picamera2, I2C display), so on a dev machine drive the pipeline directly:
 
 ```bash
-uv run pytest
+uv run python -c "
+import numpy, PIL.Image
+from resistor_reader.orchestrator import read_pipeline, load_config
+r = read_pipeline(numpy.asarray(PIL.Image.open('resistor_pictures/0000.jpg')),
+                  load_config('config.yaml'))
+print(r.resistance, [c.value for c in r.colors])"
 ```
 
-Build a distribution:
+## Modes
+
+`main.py` has three:
+
+* **read** — the real one. Waits for the button, captures, runs the pipeline,
+  displays the resistance or an error code.
+* **gather** — prompts for a known resistance, captures, and appends the image
+  and its value to the CSV. This built the test set.
+* **camera** — captures to a numbered file on each press. Nothing else.
+
+## Install on a Raspberry Pi Zero
+
+`scripts/prep-sd-card.sh` builds the whole image on a fast machine through a
+qemu-arm chroot, so the Pi never has to run `apt` or compile anything. It
+installs the packages, clones this repo, builds the venv, enables I2C, installs
+the systemd unit, and sets up a CDC-NCM USB gadget so the Pi answers at
+`10.42.0.1` over the USB cable.
 
 ```bash
-uv build
+sudo ./scripts/prep-sd-card.sh          # see the header for env vars
 ```
 
-## Install on Raspberry Pi Zero
-
-1. Flash an SD card with Raspbian Lite (32 bit)
-2. Connect the Pi to a USB to Ethernet adapter and connect it to the network
-3. Log in to the Pi
-4. `sudo apt update`
-5. `sudo apt full-upgrade`
-6. `sudo apt install git`
-7. `git clone https://github.com/ericboehlke/Resistor-Reader.git`
-8. `cd Resistor-Reader`
-9. Install dependencies
+Flash the resulting image, boot it, and the reader starts automatically:
 
 ```bash
-sudo apt install \
-  python3-dev \
-  python3-pip \
-  python3-rpi.gpio \
-  python3-picamera2 \
-  python3-opencv \
-  python3-pil \
-  python3-scipy \
-  python3-yaml \
-  python3-pytest
+ssh pi@10.42.0.1
+systemctl status resistor-reader
+journalctl -u resistor-reader -f
 ```
 
-10. `python3 -m venv .venv --system-site-packages`
-11. `source .venv/bin/activate`
-12. `python3 -m pip install adafruit-circuitpython-ht16k33`
-13. Enable i2c using `raspi-config`
-
-## Running
+To run it by hand, stop the service first:
 
 ```bash
-python3 resistor_reader/main.py read
+sudo systemctl stop resistor-reader
+cd ~/Resistor-Reader && .venv/bin/python -m resistor_reader.main read
 ```
