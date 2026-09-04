@@ -1,9 +1,29 @@
 # Pipeline tuning: only keys read by `resistor_reader` stages are kept here.
+#
+# This is the appliance config, so debug is OFF -- `logs/` is a Log2Ram RAM disk
+# and every enabled stage writes a JPEG per button press. Turn `runtime.debug`
+# on for tuning (`scripts/live_trackbar.py --debug`); the test suite enables it
+# per failing image on its own.
 
 processing:
+  # Tray interior of the 640x480 capture: top, left, bottom, right. Everything
+  # outside is the MDF frame. A frame the crop does not fit fails with E07
+  # rather than being silently truncated.
+  crop: [64, 36, 480, 598]
   debug_image: true
 
 region_of_interest:
+  # Foreground test against the white acrylic: hue far enough from the
+  # background's, saturated enough, and darker than the background.
+  hue_diff_min: 8
+  sat_min: 40
+  value_max: 220
+  open_kernel: 5
+  dilate_kernel: 10
+  close_kernel: 5
+  # Leads are thinner than this many pixels and get eroded away.
+  lead_distance: 15.0
+  crop_pad: 8
   debug_image: true
 
 segmentation:
@@ -64,8 +84,15 @@ decode:
   e24_bonus: 8.0
   min_resistance: 0.1
   max_resistance: 1.0e8
+  # Refuse a reading (E06) whose score margin over the next-best *value* is
+  # below this. A wrong reading is worse than an error, but the margin is in
+  # raw LAB-distance units and has not been calibrated against the sample set
+  # yet, so this is off by default. See docs/CODE_REVIEW_TODO.md.
+  min_confidence: 0.0
 
 runtime:
   debug:
-    enabled: true
+    enabled: false
     dir: "logs/"
+    # Oldest images are dropped past this count; 0 disables pruning.
+    max_files: 200

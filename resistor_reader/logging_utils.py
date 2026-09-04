@@ -1,18 +1,34 @@
+"""Debug image logging.
+
+Writes are opt-in (``debug=False`` is a no-op) and the destination directory is
+capped, because on the appliance ``logs/`` is a Log2Ram RAM disk: an unbounded
+five-images-per-button-press would eventually fill it.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 import PIL.Image
 
+# Roughly 30 reads' worth of per-stage images before the oldest are dropped.
+DEFAULT_MAX_FILES = 200
 
-def _resolve_debug_dir(config: Dict[str, Any]) -> Path:
-    runtime_cfg = config.get("runtime", {})
-    nested = runtime_cfg.get("debug", {}).get("dir")
-    debug_dir_value = nested or "logs"
-    return Path(debug_dir_value)
+
+def _debug_cfg(config: dict[str, Any]) -> dict[str, Any]:
+    return config.get("runtime", {}).get("debug", {}) or {}
+
+
+def _prune(debug_dir: Path, max_files: int) -> None:
+    """Drop the oldest images once the directory exceeds ``max_files``."""
+    if max_files <= 0:
+        return
+    files = sorted(debug_dir.glob("*.jpg"), key=lambda p: p.stat().st_mtime)
+    for stale in files[: max(0, len(files) - max_files)]:
+        stale.unlink(missing_ok=True)
 
 
 def save_image(
@@ -20,9 +36,9 @@ def save_image(
     suffix: str,
     *,
     debug: bool,
-    config: Dict[str, Any] | None = None,
-    ts: Optional[str] = None,
-) -> Optional[Path]:
+    config: dict[str, Any] | None = None,
+    ts: str | None = None,
+) -> Path | None:
     """Save an image to the debug log directory and return its path.
 
     Parameters
@@ -35,7 +51,8 @@ def save_image(
         When ``False`` no file is written and ``None`` is returned.
     config:
         Optional configuration dictionary. ``runtime.debug.dir`` controls the
-        destination directory. Defaults to ``"logs"``.
+        destination directory (default ``"logs"``) and ``runtime.debug.max_files``
+        how many images it keeps (default 200; 0 disables pruning).
     ts:
         Optional timestamp string to prefix the filename. When omitted, the
         current time is used.
@@ -44,10 +61,8 @@ def save_image(
     if not debug:
         return None
 
-    if config is None:
-        config = {}
-
-    debug_dir = _resolve_debug_dir(config)
+    cfg = _debug_cfg(config or {})
+    debug_dir = Path(cfg.get("dir") or "logs")
     debug_dir.mkdir(parents=True, exist_ok=True)
 
     if ts is None:
@@ -56,16 +71,10 @@ def save_image(
     if isinstance(image, np.ndarray):
         image = PIL.Image.fromarray(image)
 
-    filename_prefix = (
-        config.get("runtime", {}).get("debug", {}).get("filename_prefix")
-        if isinstance(config, dict)
-        else None
-    )
-    if isinstance(filename_prefix, str) and filename_prefix:
-        filename = f"{filename_prefix}_{suffix}.jpg"
-    else:
-        filename = f"{ts}_{suffix}.jpg"
-
-    path = debug_dir / filename
+    prefix = cfg.get("filename_prefix")
+    stem = prefix if isinstance(prefix, str) and prefix else ts
+    path = debug_dir / f"{stem}_{suffix}.jpg"
     image.save(path)
+
+    _prune(debug_dir, int(cfg.get("max_files", DEFAULT_MAX_FILES)))
     return path

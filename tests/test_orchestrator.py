@@ -1,16 +1,10 @@
-import csv
 import copy
+import csv
 import math
 import os
 import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
-
-import yaml
-
-# Ensure the project root is on the import path when tests are run directly
-sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import numpy
 import PIL.Image
@@ -19,13 +13,16 @@ import pytest
 from resistor_reader import orchestrator
 from resistor_reader.models import ErrorCodeEnum
 
+from .conftest import GROUND_TRUTH, IMAGE_DIR, REPO_ROOT, load_pipeline_config
+
+
 def _load_cases():
     """Return (filename, value) tuples for each sample resistor image."""
     cases = []
-    with open("resistor_pictures/resistors.csv", "r") as csvfile:
+    with open(GROUND_TRUTH, "r") as csvfile:
         reader = csv.reader(csvfile, delimiter=",", quotechar="|")
         for number, value in reader:
-            fname = Path("resistor_pictures") / f"{int(number):04d}.jpg"
+            fname = IMAGE_DIR / f"{int(number):04d}.jpg"
             if fname.exists():
                 cases.append((str(fname), float(value)))
     return _apply_split(cases)
@@ -52,11 +49,6 @@ def _apply_split(cases):
         for fname, value in cases
         if (value in tune_values) == keep_tune
     ]
-
-
-# Load test.yaml as a dictionary
-with open("tests/test.yaml", "r") as f:
-    test_config = yaml.safe_load(f)
 
 
 def _short_commit_hash() -> str:
@@ -152,14 +144,13 @@ def _append_report(
 def test_resistors():
     """Run all images, write markdown failure report with pass summary, and fail if regressions remain."""
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = Path("logs") / run_id
+    run_dir = REPO_ROOT / "logs" / run_id
     report_path = run_dir / "test_failures.md"
     rows: list[dict[str, str]] = []
     cases = _load_cases()
     total = len(cases)
 
-    fast_config = copy.deepcopy(test_config)
-    fast_config.setdefault("runtime", {}).setdefault("debug", {})["enabled"] = False
+    fast_config = load_pipeline_config(debug=False)
 
     for fname, expected in cases:
         image = numpy.asarray(PIL.Image.open(fname))
@@ -173,8 +164,7 @@ def test_resistors():
         # This one failed: re-run it with debug on so the report can link to the
         # montage and per-stage images.
         image_name = Path(fname).stem
-        case_config = copy.deepcopy(test_config)
-        case_config.setdefault("runtime", {}).setdefault("debug", {})["enabled"] = True
+        case_config = load_pipeline_config(debug=True)
         case_config["runtime"]["debug"]["dir"] = str(run_dir)
         case_config["runtime"]["debug"]["filename_prefix"] = image_name
         case_config["runtime"]["debug"]["montage_path"] = str(

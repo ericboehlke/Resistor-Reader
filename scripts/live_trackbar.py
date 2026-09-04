@@ -79,17 +79,35 @@ TRACKBARS: list[tuple[str, tuple[str, ...], int, int]] = [
 _PERCENT_TRACKBARS = {"seg_max_w", "seg_tex_w"}
 
 
+def _is_switch(path: tuple[str, ...]) -> bool:
+    return path[-1] in {"enabled", "debug_image"} or path[-1].endswith("debug")
+
+
+def _slider_from_config(name: str, path: tuple[str, ...], raw: Any, default: int) -> int:
+    """Convert a config value to its slider position."""
+    if isinstance(raw, bool):
+        return _bool_to_slider(raw)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return int(default)
+    return int(value * 100) if name in _PERCENT_TRACKBARS else int(value)
+
+
+def _config_from_slider(name: str, path: tuple[str, ...], value: int) -> Any:
+    """Convert a slider position back to its config value."""
+    if name in _PERCENT_TRACKBARS:
+        return value / 100.0
+    if _is_switch(path):
+        return _slider_to_bool(value)
+    return value
+
+
 def _build_overrides() -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     for name, path, _, _ in TRACKBARS:
         val = cv2.getTrackbarPos(name, CONTROL_WINDOW)
-        if name in _PERCENT_TRACKBARS:
-            _set_nested(overrides, path, val / 100.0)
-            continue
-        if path[-1].endswith("debug") or path[-1] == "enabled" or path[-1] == "debug_image":
-            _set_nested(overrides, path, _slider_to_bool(val))
-        else:
-            _set_nested(overrides, path, val)
+        _set_nested(overrides, path, _config_from_slider(name, path, val))
     return overrides
 
 
@@ -112,18 +130,7 @@ def _init_trackbars(base_config: dict[str, Any]) -> None:
     cv2.moveWindow(PREVIEW_WINDOW, 420, 60)
     for name, path, default, max_value in TRACKBARS:
         raw = _get_nested(base_config, path, default)
-        if isinstance(raw, bool):
-            initial = _bool_to_slider(raw)
-        elif name == "seg_max_w":
-            try:
-                initial = int(float(raw) * 100)
-            except Exception:
-                initial = int(default)
-        else:
-            try:
-                initial = int(raw)
-            except Exception:
-                initial = int(default)
+        initial = _slider_from_config(name, path, raw, default)
         initial = max(0, min(max_value, initial))
         cv2.createTrackbar(name, CONTROL_WINDOW, initial, max_value, lambda _: None)
 
@@ -131,18 +138,7 @@ def _init_trackbars(base_config: dict[str, Any]) -> None:
 def _reset_trackbars(base_config: dict[str, Any]) -> None:
     for name, path, default, max_value in TRACKBARS:
         raw = _get_nested(base_config, path, default)
-        if isinstance(raw, bool):
-            val = _bool_to_slider(raw)
-        elif name == "seg_max_w":
-            try:
-                val = int(float(raw) * 100)
-            except Exception:
-                val = int(default)
-        else:
-            try:
-                val = int(raw)
-            except Exception:
-                val = int(default)
+        val = _slider_from_config(name, path, raw, default)
         cv2.setTrackbarPos(name, CONTROL_WINDOW, max(0, min(max_value, val)))
 
 
