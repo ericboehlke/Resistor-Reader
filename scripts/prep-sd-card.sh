@@ -490,9 +490,19 @@ cstep "build .venv + install adafruit-circuitpython-ht16k33"
 sudo -u pi -H python3 -m venv .venv --system-site-packages
 sudo -u pi -H .venv/bin/pip install --no-cache-dir adafruit-circuitpython-ht16k33
 
-cstep "appliance tweaks to config.yaml (no debug image writes)"
-sed -i -E 's/^( *)debug_image: true/\1debug_image: false/' config.yaml
-sed -i -E 's/^( *)enabled: true/\1enabled: false/' config.yaml
+# config.yaml now ships appliance-safe (runtime.debug.enabled: false), so there
+# is nothing to patch. Fail loudly if that ever regresses: with debug on, every
+# button press writes five or six JPEGs into a Log2Ram RAM disk.
+cstep "verify config.yaml ships with debug off"
+if grep -qE '^\s+enabled:\s*true' config.yaml; then
+  echo "ERROR: config.yaml has runtime.debug.enabled: true" >&2
+  exit 1
+fi
+
+cstep "install resistor-reader.service"
+install -m 0644 scripts/resistor-reader.service \
+  /etc/systemd/system/resistor-reader.service
+systemctl enable resistor-reader.service
 
 cstep "restore diversions + regenerate initramfs (once per installed kernel)"
 restore; trap - EXIT

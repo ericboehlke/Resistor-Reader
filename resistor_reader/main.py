@@ -175,7 +175,7 @@ def read_mode(picam2, display, config: Config):
 
         # A wrong reading is worse than no reading, so refuse a value the
         # decoder could not separate from its runner-up.
-        if result.confidence < config.min_confidence:
+        if not orchestrator.is_confident(result, config.min_confidence):
             show_error(
                 display,
                 ErrorCodeEnum.E06,

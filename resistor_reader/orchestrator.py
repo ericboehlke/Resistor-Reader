@@ -206,6 +206,19 @@ def read_pipeline(
     return run.finish()
 
 
+def is_confident(result: PipelineResult, min_confidence: float) -> bool:
+    """Whether a successful reading clears the confidence floor.
+
+    Deliberately *not* applied inside ``read_pipeline``: the pipeline reports
+    what it saw and how sure it was, and the caller decides what to do about it.
+    That keeps the test suite measuring raw algorithm accuracy rather than the
+    accuracy-after-policy number the appliance shows.
+    """
+    if result.failure is not None or result.resistance is None:
+        return False
+    return result.confidence >= min_confidence
+
+
 def load_config(config_file: str | None) -> dict[str, Any]:
     """Load a configuration file for the image processing pipeline.
 

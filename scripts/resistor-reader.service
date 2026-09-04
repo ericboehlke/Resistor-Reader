@@ -1,0 +1,25 @@
+[Unit]
+Description=Resistor Reader (button -> capture -> read -> display)
+# The camera and the I2C display are ready once the device tree has settled;
+# there is no network dependency, the appliance works standalone.
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+# The pi user's default groups on Raspberry Pi OS; needed for GPIO, the I2C
+# display and the camera respectively.
+SupplementaryGroups=gpio i2c video
+# read mode resolves its --pipeline-config-file relative to here.
+WorkingDirectory=/home/pi/Resistor-Reader
+ExecStart=/home/pi/Resistor-Reader/.venv/bin/python -m resistor_reader.main read
+Restart=on-failure
+RestartSec=5
+# stdout/stderr go to the journal, which Log2Ram keeps in RAM.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
