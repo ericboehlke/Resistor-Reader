@@ -1,7 +1,9 @@
-"""Orchestrator agent coordinating the resistor reading pipeline."""
+"""Orchestrator coordinating the resistor reading pipeline."""
 
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,254 +19,191 @@ from .models import (
     BandBoundingBox,
     BandColorTuple,
     ClassificationInput,
-    ColorsEnum,
     DecodeInput,
-    ErrorCodeEnum,
     PipelineResult,
     PreprocessInput,
     RoIInput,
     SegmentationInput,
+    StageResult,
 )
 
 
-def _read_debug_image(path_value: object) -> np.ndarray | None:
-    if not isinstance(path_value, str) or not path_value:
-        return None
-    if not Path(path_value).exists():
-        return None
-    bgr = cv2.imread(path_value)
-    if bgr is None:
-        return None
-    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+@dataclass
+class _Run:
+    """State accumulated as the pipeline advances.
 
+    Every stage records itself here, so a failure return is one call that knows
+    everything gathered so far -- rather than repeating the whole result
+    construction at each of the five places a stage can fail.
+    """
 
-def _finalize_pipeline_result(
-    *,
-    config: dict[str, Any],
-    ts: str,
-    input_image: np.ndarray,
-    preprocessed_image: np.ndarray | None,
-    roi_image: np.ndarray | None,
-    failure: ErrorCodeEnum | None,
-    error_msg: str,
-    bounding_boxes: list[BandBoundingBox] | None,
-    colors: BandColorTuple | None,
-    resistance: float | None,
-    metadata: dict[str, Any],
-) -> PipelineResult:
-    debug_enabled = config.get("runtime", {}).get("debug", {}).get("enabled", False)
-    explicit_path = config.get("debug_montage_path")
-    has_explicit_path = isinstance(explicit_path, str) and bool(explicit_path)
+    config: dict[str, Any]
+    input_image: np.ndarray
+    ts: str
+    debug: bool
+    preprocessed_image: np.ndarray | None = None
+    roi_image: np.ndarray | None = None
+    bounding_boxes: list[BandBoundingBox] | None = None
+    colors: BandColorTuple | None = None
+    resistance: float | None = None
+    confidence: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+    # (panel title, image) for stages that produced a debug overlay.
+    overlays: list[tuple[str, np.ndarray]] = field(default_factory=list)
 
-    montage: np.ndarray | None = None
-    montage_path: str | None = None
-    # Assembling the montage means an overlay render, two debug-image reads and a
-    # multi-panel composite -- skip all of it unless someone actually wants the
-    # picture.
-    if debug_enabled or has_explicit_path:
-        final_overlay = render_final_overlay(
-            roi_image=roi_image,
-            bounding_boxes=bounding_boxes,
-            colors=colors,
-            resistance=resistance,
-            failure=failure,
-            error_msg=error_msg,
-        )
-        seg_img = _read_debug_image(
-            metadata.get("segmentation", {}).get("debug_image_path")
-        )
-        cls_img = _read_debug_image(
-            metadata.get("classification", {}).get("debug_image_path")
-        )
-        extra_panels = [
-            ("Segmentation", seg_img, None),
-            ("Classification", cls_img, None),
-        ]
-        montage = build_debug_montage(
-            input_image=input_image,
-            preprocessed_image=preprocessed_image,
-            roi_image=roi_image,
-            final_overlay=final_overlay,
-            failure=failure,
-            error_msg=error_msg,
-            extra_panels=extra_panels,
-        )
+    def record(self, name: str, out: StageResult, *, panel: str | None = None) -> None:
+        """Fold a finished stage's diagnostics into the run."""
+        self.metadata[name] = out._metadata
+        if panel is not None and out.debug_overlay is not None:
+            self.overlays.append((panel, out.debug_overlay))
 
-        if has_explicit_path:
-            out_path = Path(explicit_path)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(out_path), cv2.cvtColor(montage, cv2.COLOR_RGB2BGR))
-            montage_path = str(out_path)
-        else:
-            path = save_image(
-                montage, "montage", debug=debug_enabled, config=config, ts=ts
+    def finish(self, failed: StageResult | None = None) -> PipelineResult:
+        """Build the final result, with the montage if anyone wants it."""
+        failure = failed.error if failed is not None else None
+        error_msg = failed.error_msg if failed is not None else ""
+
+        debug_cfg = self.config.get("runtime", {}).get("debug", {})
+        explicit_path = debug_cfg.get("montage_path")
+        has_explicit_path = isinstance(explicit_path, str) and bool(explicit_path)
+
+        montage: np.ndarray | None = None
+        montage_path: str | None = None
+        # Assembling the montage means an overlay render and a multi-panel
+        # composite -- skip all of it unless someone actually wants the picture.
+        if self.debug or has_explicit_path:
+            montage = build_debug_montage(
+                input_image=self.input_image,
+                preprocessed_image=self.preprocessed_image,
+                roi_image=self.roi_image,
+                final_overlay=render_final_overlay(
+                    roi_image=self.roi_image,
+                    bounding_boxes=self.bounding_boxes,
+                    colors=self.colors,
+                    resistance=self.resistance,
+                    failure=failure,
+                    error_msg=error_msg,
+                ),
+                failure=failure,
+                error_msg=error_msg,
+                extra_panels=[(title, img, None) for title, img in self.overlays],
             )
-            montage_path = str(path) if path else None
 
-    metadata["debug_montage_path"] = montage_path
-    return PipelineResult(
-        failure=failure,
-        error_msg=error_msg,
-        debug_image=montage,
-        bands=bounding_boxes,
-        colors=colors,
-        resistance=resistance,
-        _metadata=metadata,
-    )
+            if has_explicit_path:
+                out_path = Path(explicit_path)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(out_path), cv2.cvtColor(montage, cv2.COLOR_RGB2BGR))
+                montage_path = str(out_path)
+            else:
+                path = save_image(
+                    montage, "montage", debug=self.debug, config=self.config, ts=self.ts
+                )
+                montage_path = str(path) if path else None
+
+        self.metadata["debug_montage_path"] = montage_path
+        return PipelineResult(
+            failure=failure,
+            error_msg=error_msg,
+            debug_image=montage,
+            bands=self.bounding_boxes,
+            colors=self.colors,
+            resistance=self.resistance,
+            confidence=self.confidence,
+            _metadata=self.metadata,
+        )
 
 
 def read_pipeline(
     array: np.ndarray,
     config: dict[str, Any] | None = None,
 ) -> PipelineResult:
-    """Execute full pipeline and return structured result contract."""
+    """Execute the full pipeline and return the structured result contract."""
 
     config = config or {}
-    debug = config.get("runtime", {}).get("debug", {}).get("enabled", False)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S%f")
+    run = _Run(
+        config=config,
+        input_image=array,
+        ts=datetime.now().strftime("%Y%m%d_%H%M%S%f"),
+        debug=config.get("runtime", {}).get("debug", {}).get("enabled", False),
+    )
+    # Mutated in place as stages run, so the timings survive an early return.
+    timings: dict[str, float] = {}
+    run.metadata["timings_ms"] = timings
 
-    pre_out = preprocess.preprocess(
-        PreprocessInput(image=array, config=config), debug=debug, ts=ts
+    def timed(name: str, call, panel: str | None = None):
+        start = time.perf_counter()
+        out = call()
+        timings[name] = (time.perf_counter() - start) * 1000.0
+        run.record(name, out, panel=panel)
+        return out
+
+    pre_out = timed(
+        "preprocess",
+        lambda: preprocess.preprocess(
+            PreprocessInput(image=array, config=config), debug=run.debug, ts=run.ts
+        ),
     )
     if not pre_out.success:
-        return _finalize_pipeline_result(
-            config=config,
-            ts=ts,
-            input_image=array,
-            preprocessed_image=None,
-            roi_image=None,
-            failure=ErrorCodeEnum.E01,
-            error_msg=str(pre_out._metadata.get("error_msg", "Preprocess failed.")),
-            bounding_boxes=None,
-            colors=None,
-            resistance=None,
-            metadata={"preprocess": pre_out._metadata},
-        )
+        return run.finish(pre_out)
+    run.preprocessed_image = pre_out.image
 
-    roi_out = roi.detect_resistor_roi(
-        RoIInput(image=pre_out.image, config=config), debug=debug, ts=ts
+    roi_out = timed(
+        "roi",
+        lambda: roi.detect_resistor_roi(
+            RoIInput(image=pre_out.image, config=config), debug=run.debug, ts=run.ts
+        ),
     )
     if not roi_out.success:
-        return _finalize_pipeline_result(
-            config=config,
-            ts=ts,
-            input_image=array,
-            preprocessed_image=pre_out.image,
-            roi_image=roi_out.image,
-            failure=ErrorCodeEnum.E02,
-            error_msg=str(roi_out._metadata.get("error_msg", "No resistor found.")),
-            bounding_boxes=None,
-            colors=None,
-            resistance=None,
-            metadata={"preprocess": pre_out._metadata, "roi": roi_out._metadata},
-        )
-
+        return run.finish(roi_out)
+    run.roi_image = roi_out.image
     assert roi_out.body_mask is not None
-    seg_out = bands.segment_bands(
-        SegmentationInput(
-            image=roi_out.image, body_mask=roi_out.body_mask, config=config
+
+    seg_out = timed(
+        "segmentation",
+        lambda: bands.segment_bands(
+            SegmentationInput(
+                image=roi_out.image, body_mask=roi_out.body_mask, config=config
+            ),
+            debug=run.debug,
+            ts=run.ts,
         ),
-        debug=debug,
-        ts=ts,
+        panel="Segmentation",
     )
+    run.bounding_boxes = seg_out.bounding_boxes or None
     if not seg_out.success:
-        return _finalize_pipeline_result(
-            config=config,
-            ts=ts,
-            input_image=array,
-            preprocessed_image=pre_out.image,
-            roi_image=roi_out.image,
-            failure=ErrorCodeEnum.E03,
-            error_msg=str(seg_out._metadata.get("error_msg", "Segmentation failed.")),
-            bounding_boxes=seg_out.bounding_boxes,
-            colors=None,
-            resistance=None,
-            metadata={
-                "preprocess": pre_out._metadata,
-                "roi": roi_out._metadata,
-                "segmentation": seg_out._metadata,
-            },
-        )
+        return run.finish(seg_out)
 
-    cls_out = bands.classify_bands(
-        ClassificationInput(
-            image=roi_out.image,
-            bounding_boxes=seg_out.bounding_boxes,
-            config=config,
-            body_tex=float(seg_out._metadata.get("body_tex", 0.0)),
+    cls_out = timed(
+        "classification",
+        lambda: bands.classify_bands(
+            ClassificationInput(
+                image=roi_out.image,
+                bounding_boxes=seg_out.bounding_boxes,
+                config=config,
+                body_tex=seg_out.body_tex,
+            ),
+            debug=run.debug,
+            ts=run.ts,
         ),
-        debug=debug,
-        ts=ts,
+        panel="Classification",
     )
-    if not cls_out.success or cls_out.colors is None:
-        return _finalize_pipeline_result(
-            config=config,
-            ts=ts,
-            input_image=array,
-            preprocessed_image=pre_out.image,
-            roi_image=roi_out.image,
-            failure=ErrorCodeEnum.E04,
-            error_msg=str(cls_out._metadata.get("error_msg", "Classification failed.")),
-            bounding_boxes=seg_out.bounding_boxes,
-            colors=None,
-            resistance=None,
-            metadata={
-                "preprocess": pre_out._metadata,
-                "roi": roi_out._metadata,
-                "segmentation": seg_out._metadata,
-                "classification": cls_out._metadata,
-            },
-        )
+    if not cls_out.success:
+        return run.finish(cls_out)
 
-    scores = [
-        {ColorsEnum(name): value for name, value in band.items()}
-        for band in cls_out._metadata.get("scores", [])
-    ]
-    dec_out = decode.decode_best(DecodeInput(scores=scores, config=config))
+    dec_out = timed(
+        "decode",
+        lambda: decode.decode_best(
+            DecodeInput(scores=cls_out.scores, config=config)
+        ),
+    )
     if not dec_out.success or dec_out.resistance is None:
-        return _finalize_pipeline_result(
-            config=config,
-            ts=ts,
-            input_image=array,
-            preprocessed_image=pre_out.image,
-            roi_image=roi_out.image,
-            failure=ErrorCodeEnum.E04,
-            error_msg=str(dec_out._metadata.get("error_msg", "Resolve failed.")),
-            bounding_boxes=seg_out.bounding_boxes,
-            colors=cls_out.colors,
-            resistance=None,
-            metadata={
-                "preprocess": pre_out._metadata,
-                "roi": roi_out._metadata,
-                "segmentation": seg_out._metadata,
-                "classification": cls_out._metadata,
-                "resolve": dec_out._metadata,
-            },
-        )
+        return run.finish(dec_out)
 
-    boxes = seg_out.bounding_boxes
     if dec_out.reversed_:
-        boxes = list(reversed(boxes))
-    return _finalize_pipeline_result(
-        config=config,
-        ts=ts,
-        input_image=array,
-        preprocessed_image=pre_out.image,
-        roi_image=roi_out.image,
-        failure=None,
-        error_msg="",
-        bounding_boxes=boxes,
-        colors=dec_out.colors,
-        resistance=dec_out.resistance,
-        metadata={
-            "preprocess": pre_out._metadata,
-            "roi": roi_out._metadata,
-            "segmentation": seg_out._metadata,
-            "classification": cls_out._metadata,
-            "resolve": dec_out._metadata,
-            "confidence": dec_out.confidence,
-        },
-    )
+        run.bounding_boxes = list(reversed(seg_out.bounding_boxes))
+    run.colors = dec_out.colors
+    run.resistance = dec_out.resistance
+    run.confidence = dec_out.confidence
+    return run.finish()
 
 
 def load_config(config_file: str | None) -> dict[str, Any]:

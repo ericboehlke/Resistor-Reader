@@ -72,17 +72,21 @@ def _short_commit_hash() -> str:
         return "unknown"
 
 
+_FAILED_STAGE_BY_CODE = {
+    ErrorCodeEnum.E07: "preprocess",
+    ErrorCodeEnum.E02: "roi",
+    ErrorCodeEnum.E03: "segmentation",
+}
+
+
 def _infer_failed_stage(result, expected_value: float) -> str:
-    if result.failure == ErrorCodeEnum.E01:
-        return "preprocess"
-    if result.failure == ErrorCodeEnum.E02:
-        return "roi"
-    if result.failure == ErrorCodeEnum.E03:
-        return "segmentation"
+    if result.failure in _FAILED_STAGE_BY_CODE:
+        return _FAILED_STAGE_BY_CODE[result.failure]
     if result.failure == ErrorCodeEnum.E04:
-        if result._metadata.get("resolve"):
-            return "resolve"
-        return "classification"
+        # Classification and decode share E04; only decode leaves metadata.
+        return "decode" if result._metadata.get("decode") else "classification"
+    if result.failure is not None:
+        return result.failure.name
     if result.resistance is None or not math.isclose(result.resistance, expected_value):
         return "result"
     return ""
@@ -173,7 +177,9 @@ def test_resistors():
         case_config.setdefault("runtime", {}).setdefault("debug", {})["enabled"] = True
         case_config["runtime"]["debug"]["dir"] = str(run_dir)
         case_config["runtime"]["debug"]["filename_prefix"] = image_name
-        case_config["debug_montage_path"] = str(run_dir / f"{image_name}_montage.jpg")
+        case_config["runtime"]["debug"]["montage_path"] = str(
+            run_dir / f"{image_name}_montage.jpg"
+        )
         result = orchestrator.read_pipeline(image, case_config)
         failed_stage = _infer_failed_stage(result, expected)
         if not failed_stage:

@@ -127,12 +127,8 @@ def detect_resistor_roi(
     except ValueError:
         return RoIOutput(
             image=image,
-            success=False,
-            body_mask=None,
-            _metadata={
-                "error_code": ErrorCodeEnum.E02.value,
-                "error_msg": "No resistor foreground component found.",
-            },
+            error=ErrorCodeEnum.E02,
+            error_msg="No resistor foreground component found.",
         )
 
     crop, crop_mask, bbox = _rotate_and_crop(image, mask)
@@ -147,7 +143,6 @@ def detect_resistor_roi(
 
     return RoIOutput(
         image=crop,
-        success=True,
         body_mask=(crop_mask * 255).astype(np.uint8),
         _metadata={
             "bbox": bbox,

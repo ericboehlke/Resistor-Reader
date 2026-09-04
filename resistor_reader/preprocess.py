@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+from typing import Any
+
 import cv2
 import numpy as np
 
 from .logging_utils import save_image
-from .models import PreprocessInput, PreprocessOutput
+from .models import ErrorCodeEnum, PreprocessInput, PreprocessOutput
+
+# Tray interior for the appliance's 640x480 capture: everything outside is the
+# MDF frame, which is neither white nor part of the scene.
+DEFAULT_CROP = (64, 36, 480, 598)  # top, left, bottom, right
+
+
+def _crop_box(config: dict[str, Any]) -> tuple[int, int, int, int]:
+    raw = (config.get("processing", {}) or {}).get("crop")
+    if raw is None:
+        return DEFAULT_CROP
+    if len(raw) != 4:
+        raise ValueError(f"processing.crop needs 4 values, got {len(raw)}")
+    return tuple(int(v) for v in raw)  # type: ignore[return-value]
 
 
 def auto_white_balance(array: np.ndarray) -> np.ndarray:
@@ -41,10 +56,38 @@ def preprocess(
     debug: bool = False,
     ts: str | None = None,
 ) -> PreprocessOutput:
-    """Apply preprocessing and return the stage contract output."""
-    # Crop to tray interior before white balance.
-    cropped = stage_input.image[64:480, 36:598]
-    processed = auto_white_balance(cropped)
+    """Crop to the tray interior and white balance.
+
+    Fails with ``E07`` rather than silently mis-cropping when the frame is not
+    the size the crop rectangle was measured for -- a capture at a different
+    resolution used to produce a truncated image and a nonsense reading.
+    """
+    image = stage_input.image
+    if image.ndim != 3 or image.shape[2] != 3:
+        return PreprocessOutput(
+            image=image,
+            error=ErrorCodeEnum.E07,
+            error_msg=f"Expected an HxWx3 RGB image, got shape {image.shape}.",
+        )
+
+    try:
+        top, left, bottom, right = _crop_box(stage_input.config)
+    except (TypeError, ValueError) as exc:
+        return PreprocessOutput(
+            image=image, error=ErrorCodeEnum.E07, error_msg=str(exc)
+        )
+
+    h, w = image.shape[:2]
+    if not (0 <= top < bottom <= h and 0 <= left < right <= w):
+        return PreprocessOutput(
+            image=image,
+            error=ErrorCodeEnum.E07,
+            error_msg=(
+                f"Crop {(top, left, bottom, right)} does not fit a {w}x{h} frame."
+            ),
+        )
+
+    processed = auto_white_balance(image[top:bottom, left:right])
     debug = debug and stage_input.config.get("processing", {}).get("debug_image", False)
     pre_path = save_image(
         processed,
@@ -55,7 +98,5 @@ def preprocess(
     )
     return PreprocessOutput(
         image=processed,
-        success=True,
         _metadata={"debug_image_path": str(pre_path) if pre_path else None},
     )
-    return output

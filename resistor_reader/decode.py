@@ -27,9 +27,38 @@ from .models import (
     DecodeInput,
     DecodeOutput,
     ErrorCodeEnum,
-    ResolveInput,
 )
-from .resolve import resolve_value
+
+# The color code itself: first two bands are significant digits, the third is a
+# power-of-ten multiplier.  The fourth (tolerance) does not affect the value,
+# but ``_sequence_prior`` uses it to work out which end is which.
+DIGIT_MAP: dict[ColorsEnum, int] = {
+    ColorsEnum.BLACK: 0,
+    ColorsEnum.BROWN: 1,
+    ColorsEnum.RED: 2,
+    ColorsEnum.ORANGE: 3,
+    ColorsEnum.YELLOW: 4,
+    ColorsEnum.GREEN: 5,
+    ColorsEnum.BLUE: 6,
+    ColorsEnum.VIOLET: 7,
+    ColorsEnum.GRAY: 8,
+    ColorsEnum.WHITE: 9,
+}
+
+MULTIPLIER_MAP: dict[ColorsEnum, float] = {
+    ColorsEnum.BLACK: 1,
+    ColorsEnum.BROWN: 10,
+    ColorsEnum.RED: 100,
+    ColorsEnum.ORANGE: 1_000,
+    ColorsEnum.YELLOW: 10_000,
+    ColorsEnum.GREEN: 100_000,
+    ColorsEnum.BLUE: 1_000_000,
+    ColorsEnum.VIOLET: 10_000_000,
+    ColorsEnum.GRAY: 100_000_000,
+    ColorsEnum.WHITE: 1_000_000_000,
+    ColorsEnum.GOLD: 0.1,
+    ColorsEnum.SILVER: 0.01,
+}
 
 # EIA-RS-279 tolerance band colors.  Black, orange, yellow and white never
 # appear as a tolerance.
@@ -54,19 +83,21 @@ E24_PAIRS: frozenset[int] = frozenset(
     }
 )
 
-_DIGITS = [
-    ColorsEnum.BLACK,
-    ColorsEnum.BROWN,
-    ColorsEnum.RED,
-    ColorsEnum.ORANGE,
-    ColorsEnum.YELLOW,
-    ColorsEnum.GREEN,
-    ColorsEnum.BLUE,
-    ColorsEnum.VIOLET,
-    ColorsEnum.GRAY,
-    ColorsEnum.WHITE,
-]
-_DIGIT_OF = {c: i for i, c in enumerate(_DIGITS)}
+
+def resolve_value(colors: BandColorTuple) -> float | None:
+    """Return the resistance in ohms for four ordered bands, or ``None``.
+
+    ``None`` means the sequence is not a legal 4-band code -- a non-digit in one
+    of the first two positions, or a non-multiplier in the third.
+    """
+    if len(colors) != 4:
+        return None
+    if colors[0] not in DIGIT_MAP or colors[1] not in DIGIT_MAP:
+        return None
+    if colors[2] not in MULTIPLIER_MAP:
+        return None
+    significand = DIGIT_MAP[colors[0]] * 10 + DIGIT_MAP[colors[1]]
+    return float(significand * MULTIPLIER_MAP[colors[2]])
 
 
 def _decode_cfg(config: dict[str, Any]) -> dict[str, Any]:
@@ -90,14 +121,14 @@ def _sequence_prior(colors: BandColorTuple, cfg: dict[str, Any]) -> float | None
     """Return the prior score for a band sequence, or ``None`` if illegal."""
     if colors[3] not in TOLERANCE_COLORS:
         return None
-    if colors[0] not in _DIGIT_OF or colors[1] not in _DIGIT_OF:
+    if colors[0] not in DIGIT_MAP or colors[1] not in DIGIT_MAP:
         return None
     if colors[0] == ColorsEnum.BLACK:
         return None
     prior = 0.0
     if colors[3] == ColorsEnum.GOLD:
         prior += cfg["gold_tolerance_bonus"]
-    pair = _DIGIT_OF[colors[0]] * 10 + _DIGIT_OF[colors[1]]
+    pair = DIGIT_MAP[colors[0]] * 10 + DIGIT_MAP[colors[1]]
     if pair in E24_PAIRS:
         prior += cfg["e24_bonus"]
     return prior
@@ -124,15 +155,8 @@ def decode_best(stage_input: DecodeInput) -> DecodeOutput:
     scores = stage_input.scores
     if len(scores) != 4:
         return DecodeOutput(
-            resistance=None,
-            colors=None,
-            reversed_=False,
-            confidence=0.0,
-            success=False,
-            _metadata={
-                "error_code": ErrorCodeEnum.E04.value,
-                "error_msg": f"Expected 4 band scores, found {len(scores)}",
-            },
+            error=ErrorCodeEnum.E04,
+            error_msg=f"Expected 4 band scores, found {len(scores)}",
         )
 
     cfg = _decode_cfg(stage_input.config)
@@ -140,10 +164,9 @@ def decode_best(stage_input: DecodeInput) -> DecodeOutput:
     runner_up = float("-inf")
 
     for total, colors, reversed_ in _hypotheses(scores, cfg):
-        resolved = resolve_value(ResolveInput(colors=colors, config=stage_input.config))
-        if not resolved.success or resolved.resistance is None:
+        value = resolve_value(colors)
+        if value is None:
             continue
-        value = resolved.resistance
         if not (cfg["min_resistance"] <= value <= cfg["max_resistance"]):
             continue
         if best is None or total > best[0]:
@@ -155,15 +178,8 @@ def decode_best(stage_input: DecodeInput) -> DecodeOutput:
 
     if best is None:
         return DecodeOutput(
-            resistance=None,
-            colors=None,
-            reversed_=False,
-            confidence=0.0,
-            success=False,
-            _metadata={
-                "error_code": ErrorCodeEnum.E04.value,
-                "error_msg": "No valid band sequence.",
-            },
+            error=ErrorCodeEnum.E04,
+            error_msg="No valid band sequence.",
         )
 
     total, colors, reversed_, value = best
@@ -173,6 +189,5 @@ def decode_best(stage_input: DecodeInput) -> DecodeOutput:
         colors=colors,
         reversed_=reversed_,
         confidence=confidence,
-        success=True,
         _metadata={"score": total, "runner_up": runner_up},
     )

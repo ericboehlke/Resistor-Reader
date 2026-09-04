@@ -526,14 +526,7 @@ def segment_bands(
     try:
         segments, dbg_cols = _segment_columns(image, body_mask, cfg)
     except ValueError as exc:
-        return SegmentationOutput(
-            bounding_boxes=[],
-            success=False,
-            _metadata={
-                "error_code": ErrorCodeEnum.E03.value,
-                "error_msg": str(exc),
-            },
-        )
+        return SegmentationOutput(error=ErrorCodeEnum.E03, error_msg=str(exc))
 
     # ``_extract_bands`` returns exactly four runs or raises, so reaching here
     # means four boxes.
@@ -542,10 +535,10 @@ def segment_bands(
     metadata: dict[str, object] = {
         "raw_segments": segments,
         "body_lab": [float(v) for v in dbg_cols["body_lab"]],
-        "body_tex": float(dbg_cols["body_tex"]),
         "threshold": float(dbg_cols["threshold"]),
     }
 
+    overlay: np.ndarray | None = None
     dbg = debug and stage_input.config.get("segmentation", {}).get("debug_image", False)
     if dbg:
         overlay = _annotate(
@@ -578,7 +571,8 @@ def segment_bands(
 
     return SegmentationOutput(
         bounding_boxes=boxes,
-        success=True,
+        body_tex=float(dbg_cols["body_tex"]),
+        debug_overlay=overlay,
         _metadata=metadata,
     )
 
@@ -621,28 +615,23 @@ def classify_bands(
 ) -> ClassificationOutput:
     """Score each band against every reference color.
 
-    ``colors`` holds the top-scoring label per band in left-to-right order.  No
-    orientation fix is applied here -- ``decode.decode_best`` chooses the band
-    order using the full score matrix together with the resistor color code
-    rules.
+    Returns one score per color per band, in left-to-right image order.  No hard
+    label and no orientation fix is applied here -- ``decode.decode_best``
+    chooses both the band order and the labels from the full score matrix
+    together with the resistor color code rules.
     """
     image = stage_input.image
     boxes = stage_input.bounding_boxes
     if len(boxes) != 4:
         return ClassificationOutput(
-            colors=None,
-            success=False,
-            _metadata={
-                "error_code": ErrorCodeEnum.E03.value,
-                "error_msg": f"Expected 4 bounding boxes, found {len(boxes)}",
-            },
+            error=ErrorCodeEnum.E03,
+            error_msg=f"Expected 4 bounding boxes, found {len(boxes)}",
         )
 
     cfg = _classification_cfg(stage_input.config)
     body_tex = float(stage_input.body_tex)
 
     segments: list[tuple[int, int]] = []
-    colors: list[ColorsEnum] = []
     scores: list[dict[ColorsEnum, float]] = []
     features: list[dict[str, float]] = []
     for x0, y0, x1, y1 in boxes:
@@ -650,40 +639,30 @@ def classify_bands(
         x1c, y1c = min(image.shape[1], x1), min(image.shape[0], y1)
         if x1c <= x0c or y1c <= y0c:
             return ClassificationOutput(
-                colors=None,
-                success=False,
-                _metadata={
-                    "error_code": ErrorCodeEnum.E04.value,
-                    "error_msg": "Invalid bounding box dimensions.",
-                },
+                error=ErrorCodeEnum.E04,
+                error_msg="Invalid bounding box dimensions.",
             )
-        band_scores, band_feats = _band_scores(
-            image[y0c:y1c, x0c:x1c], body_tex, cfg
-        )
+        band_scores, band_feats = _band_scores(image[y0c:y1c, x0c:x1c], body_tex, cfg)
         segments.append((x0c, x1c))
         scores.append(band_scores)
         features.append(band_feats)
-        colors.append(max(band_scores, key=band_scores.get))
 
-    colors_tuple = (colors[0], colors[1], colors[2], colors[3])
-    metadata: dict[str, object] = {
-        "segments": segments,
-        "scores": [{c.value: v for c, v in s.items()} for s in scores],
-        "features": features,
-    }
+    metadata: dict[str, object] = {"segments": segments, "features": features}
 
+    overlay: np.ndarray | None = None
     dbg = debug and stage_input.config.get("classification", {}).get(
         "debug_image", False
     )
     if dbg:
-        overlay = _annotate(image, segments, [c.value for c in colors])
+        # The arg-max label is the decoder's starting point, not its answer, but
+        # it is the useful thing to draw on a debug overlay.
+        labels = [max(s, key=s.get).value for s in scores]
+        overlay = _annotate(image, segments, labels)
         debug_path = save_image(
             overlay, "classification", debug=True, config=stage_input.config, ts=ts
         )
         metadata["debug_image_path"] = str(debug_path) if debug_path else None
 
     return ClassificationOutput(
-        colors=colors_tuple,
-        success=True,
-        _metadata=metadata,
+        scores=scores, debug_overlay=overlay, _metadata=metadata
     )

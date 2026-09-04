@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
+"""Appliance entry point: button, camera, pipeline, segment display."""
+
+from __future__ import annotations
 
 import argparse
 import csv
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import board
 import RPi.GPIO as GPIO
@@ -13,27 +17,37 @@ from adafruit_ht16k33 import segments
 from picamera2 import Picamera2
 
 from resistor_reader import orchestrator
+from resistor_reader.display import resistance_str, show_error, show_message
 from resistor_reader.models import ErrorCodeEnum
 
 
 @dataclass
 class Config:
-    BUTTON_PIN: int
-    LEDS_PIN: int
-    SAVE_DIR: Path
-    CSV_PATH: Path
-    RESOLUTION: tuple
-    AWB_GAINS: tuple
-    START_NUMBER: int
-    PIPELINE_CONFIG_FILE: str | None = None
+    button_pin: int
+    leds_pin: int
+    resolution: tuple[int, int]
+    awb_gains: tuple[float, float]
+    save_dir: Path = Path("resistor_pictures")
+    csv_path: Path = Path("resistor_pictures/resistors.csv")
+    start_number: int = 0
+    # Loaded once at startup rather than re-read from disk on every capture.
+    pipeline_config: dict[str, Any] = field(default_factory=dict)
     image_number: int = 0
+
+    @property
+    def min_confidence(self) -> float:
+        """Score margin below which a reading is refused as ``E06``.
+
+        Zero (the default) accepts every reading the decoder considers legal.
+        """
+        decode_cfg = self.pipeline_config.get("decode", {}) or {}
+        return float(decode_cfg.get("min_confidence", 0.0))
 
 
 def ensure_paths(config: Config):
-    config.SAVE_DIR.mkdir(parents=True, exist_ok=True)
-    if not config.CSV_PATH.exists():
-        # create header if you want one; otherwise omit this block
-        with open(config.CSV_PATH, "a", newline="") as f:
+    config.save_dir.mkdir(parents=True, exist_ok=True)
+    if not config.csv_path.exists():
+        with open(config.csv_path, "a", newline="") as f:
             writer = csv.writer(
                 f, delimiter=",", quotechar="|", quoting=csv.QUOTE_MINIMAL
             )
@@ -42,7 +56,7 @@ def ensure_paths(config: Config):
 
 def setup_gpio(config: Config):
     GPIO.setmode(GPIO.BCM)
-    GPIO.setup(config.LEDS_PIN, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.setup(config.leds_pin, GPIO.OUT, initial=GPIO.LOW)
 
 
 def setup_display():
@@ -54,8 +68,7 @@ def setup_display():
 
 def setup_camera(config: Config):
     cam = Picamera2()
-    # Still capture configuration at 640x480
-    config_obj = cam.create_still_configuration(main={"size": config.RESOLUTION})
+    config_obj = cam.create_still_configuration(main={"size": config.resolution})
     cam.configure(config_obj)
 
     # Start camera, then set manual WB (disable AWB, apply gains)
@@ -65,50 +78,10 @@ def setup_camera(config: Config):
     cam.set_controls(
         {
             "AwbEnable": False,  # turn off auto white balance
-            "ColourGains": config.AWB_GAINS,  # apply manual gains
+            "ColourGains": config.awb_gains,  # apply manual gains
         }
     )
     return cam
-
-
-def resistance_str(value):
-    """Format a resistance value to fit the 4-character display.
-
-    Keeps three significant figures at most so values like 10 kOhm render as
-    ``10.0k`` rather than overflowing the four digits.
-    """
-    if value >= 1_000_000:
-        scaled, suffix = value / 1_000_000, "M"
-    elif value >= 1_000:
-        scaled, suffix = value / 1_000, "k"
-    else:
-        scaled, suffix = float(value), ""
-    if scaled >= 100:
-        body = f"{scaled:.0f}"
-    elif scaled >= 10:
-        body = f"{scaled:.1f}"
-    else:
-        body = f"{scaled:.2f}"
-    return f"{body}{suffix}"
-
-
-def show_message(display, text: str) -> None:
-    """Write to the segment display without ever taking the loop down with it."""
-    try:
-        display.print(text)
-    except Exception:
-        try:
-            display.fill(0)
-            display.print(text[:4])
-        except Exception:
-            pass
-
-
-def show_error(display, code: ErrorCodeEnum, detail: str = "") -> None:
-    """Report a failure on the console and surface its code on the display."""
-    reason = f"{code.value}: {detail}" if detail else code.value
-    print(f"[{code.name}] {reason}")
-    show_message(display, code.name)
 
 
 def gather_mode(picam2, display, config: Config):
@@ -124,13 +97,13 @@ def gather_mode(picam2, display, config: Config):
         print("Invalid resistance value, please enter a number.")
         return
     display.print(resistance_str(float(resistance)))
-    filename = config.SAVE_DIR / f"{str(config.image_number).zfill(4)}.jpg"
-    GPIO.output(config.LEDS_PIN, True)
+    filename = config.save_dir / f"{str(config.image_number).zfill(4)}.jpg"
+    GPIO.output(config.leds_pin, True)
     time.sleep(0.1)
     picam2.capture_file(str(filename))
     time.sleep(0.1)
-    GPIO.output(config.LEDS_PIN, False)
-    with open(config.CSV_PATH, "a", newline="") as csvfile:
+    GPIO.output(config.leds_pin, False)
+    with open(config.csv_path, "a", newline="") as csvfile:
         writer = csv.writer(
             csvfile, delimiter=",", quotechar="|", quoting=csv.QUOTE_MINIMAL
         )
@@ -147,21 +120,21 @@ def camera_mode(picam2, display, config: Config):
         config.image_number += 1
     display.print("PUSH")
     print("Ready: press the button to take a picture...")
-    GPIO.wait_for_edge(config.BUTTON_PIN, GPIO.FALLING)
+    GPIO.wait_for_edge(config.button_pin, GPIO.FALLING)
     # Simple debounce
     time.sleep(0.03)
-    if GPIO.input(config.BUTTON_PIN) == GPIO.LOW:
+    if GPIO.input(config.button_pin) == GPIO.LOW:
         print("Taking picture with flash...")
         display.print("SNAP")
-        GPIO.output(config.LEDS_PIN, True)
+        GPIO.output(config.leds_pin, True)
         time.sleep(0.1)
         picam2.capture_file(str(outfile))
         time.sleep(0.1)
-        GPIO.output(config.LEDS_PIN, False)
+        GPIO.output(config.leds_pin, False)
         display.print("DONE")
         print(f"Saved to {outfile.resolve()}")
     # Wait for release so we don't immediately retrigger
-    while GPIO.input(config.BUTTON_PIN) == GPIO.LOW:
+    while GPIO.input(config.button_pin) == GPIO.LOW:
         time.sleep(0.01)
 
 
@@ -170,56 +143,63 @@ def read_mode(picam2, display, config: Config):
     Wait for button press, take a picture, run the pipeline, and show the
     resistance -- or the failing stage's error code -- on the display.
     """
-    GPIO.wait_for_edge(config.BUTTON_PIN, GPIO.FALLING)
+    GPIO.wait_for_edge(config.button_pin, GPIO.FALLING)
     time.sleep(0.03)  # Simple debounce
-    if GPIO.input(config.BUTTON_PIN) == GPIO.LOW:
+    if GPIO.input(config.button_pin) == GPIO.LOW:
         print("Taking picture...")
         display.print("READ")
-        GPIO.output(config.LEDS_PIN, True)
+        GPIO.output(config.leds_pin, True)
         time.sleep(0.1)
         try:
             img_array = picam2.capture_array("main")
         except Exception as e:  # camera not ready, driver/I-O error
-            GPIO.output(config.LEDS_PIN, False)
+            GPIO.output(config.leds_pin, False)
             show_error(display, ErrorCodeEnum.E01, str(e))
             time.sleep(2)
             return
         time.sleep(0.1)
-        GPIO.output(config.LEDS_PIN, False)
+        GPIO.output(config.leds_pin, False)
 
         print("Processing image...")
-        pipeline_config = orchestrator.load_config(
-            config.PIPELINE_CONFIG_FILE or None
-        )
         try:
-            result = orchestrator.read_pipeline(img_array, pipeline_config)
+            result = orchestrator.read_pipeline(img_array, config.pipeline_config)
         except Exception:  # a stage blew up instead of reporting failure
             traceback.print_exc()
-            show_error(display, ErrorCodeEnum.E02, "pipeline crashed")
+            show_error(display, ErrorCodeEnum.E05, "pipeline crashed")
             time.sleep(2)
             return
 
         if result.failure is not None or result.resistance is None:
+            show_error(display, result.failure or ErrorCodeEnum.E04, result.error_msg)
+            time.sleep(2)
+            return
+
+        # A wrong reading is worse than no reading, so refuse a value the
+        # decoder could not separate from its runner-up.
+        if result.confidence < config.min_confidence:
             show_error(
                 display,
-                result.failure or ErrorCodeEnum.E04,
-                result.error_msg,
+                ErrorCodeEnum.E06,
+                f"margin {result.confidence:.1f} < {config.min_confidence:.1f}",
             )
             time.sleep(2)
             return
 
-        colors = (
-            ", ".join(c.value for c in result.colors) if result.colors else "?"
+        colors = ", ".join(c.value for c in result.colors) if result.colors else "?"
+        timings = result._metadata.get("timings_ms", {})
+        total_ms = sum(timings.values())
+        print(
+            f"Detected resistance: {result.resistance:g} ohms [{colors}] "
+            f"in {total_ms:.0f} ms (confidence {result.confidence:.1f})"
         )
-        print(f"Detected resistance: {result.resistance:g} ohms [{colors}]")
         show_message(display, resistance_str(result.resistance))
     # Wait for release so we don't immediately retrigger
-    while GPIO.input(config.BUTTON_PIN) == GPIO.LOW:
+    while GPIO.input(config.button_pin) == GPIO.LOW:
         time.sleep(0.01)
 
 
 def run_loop(mode_func, config: Config):
-    config.image_number = config.START_NUMBER
+    config.image_number = config.start_number
     display = None
     picam2 = None
     try:
@@ -252,26 +232,27 @@ def run_loop(mode_func, config: Config):
                 pass
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Resistor Reader")
-    subparsers = parser.add_subparsers(
-        dest="mode", required=True, help="Operation mode"
-    )
+def parse_resolution(text: str) -> tuple[int, int]:
+    if "x" not in text.lower():
+        raise ValueError("Resolution must be in the format WxH, e.g. 640x480")
+    w, h = text.lower().split("x", 1)
+    return int(w), int(h)
 
-    # Shared config arguments
+
+def parse_awb_gains(text: str) -> tuple[float, float]:
+    if "," not in text:
+        raise ValueError("AWB gains must be in the format red,blue, e.g. 1.5,1.4")
+    r, b = text.split(",", 1)
+    return float(r), float(b)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Resistor Reader")
+    subparsers = parser.add_subparsers(dest="mode", required=True, help="Operation mode")
+
     def add_common_args(sp):
-        sp.add_argument(
-            "--button-pin",
-            type=int,
-            default=17,
-            help="GPIO pin for button",
-        )
-        sp.add_argument(
-            "--leds-pin",
-            type=int,
-            default=27,
-            help="GPIO pin for LEDs",
-        )
+        sp.add_argument("--button-pin", type=int, default=17, help="GPIO pin for button")
+        sp.add_argument("--leds-pin", type=int, default=27, help="GPIO pin for LEDs")
         sp.add_argument(
             "--resolution",
             type=str,
@@ -279,15 +260,12 @@ def main():
             help="Camera resolution, e.g. 640x480",
         )
         sp.add_argument(
-            "--awb-gains",
-            type=str,
-            default="1.5,1.4",
-            help='AWB gains as "red,blue"',
+            "--awb-gains", type=str, default="1.5,1.4", help='AWB gains as "red,blue"'
         )
 
-    # Gather subcommand
     parser_gather = subparsers.add_parser("gather", help="Gather mode")
     add_common_args(parser_gather)
+    parser_gather.set_defaults(func=gather_mode)
     parser_gather.add_argument(
         "--csv-path",
         type=str,
@@ -301,79 +279,48 @@ def main():
         help="Directory to save images and CSV",
     )
     parser_gather.add_argument(
-        "--start-number",
-        type=int,
-        default=0,
-        help="Starting image number",
+        "--start-number", type=int, default=0, help="Starting image number"
     )
 
-    # Camera subcommand
     parser_camera = subparsers.add_parser("camera", help="Camera mode")
     add_common_args(parser_camera)
+    parser_camera.set_defaults(func=camera_mode)
     parser_camera.add_argument(
-        "--start-number",
-        type=int,
-        default=0,
-        help="Starting image number",
+        "--start-number", type=int, default=0, help="Starting image number"
     )
 
-    # Read subcommand
     parser_read = subparsers.add_parser("read", help="Read mode")
     add_common_args(parser_read)
+    parser_read.set_defaults(func=read_mode)
     parser_read.add_argument(
         "--pipeline-config-file",
         type=str,
         default="config.yaml",
         help="Config file for the image processing pipeline.",
     )
+    return parser
 
-    args = parser.parse_args()
 
-    # Build config dataclass
-    if hasattr(args, "save_dir"):
-        save_dir = Path(args.save_dir)
-    else:
-        save_dir = Path("resistor_pictures")
-    if hasattr(args, "csv_path") and args.csv_path is not None:
-        csv_path = Path(args.csv_path)
-    else:
-        csv_path = save_dir / "resistors.csv"
-    if "x" in args.resolution:
-        w, h = args.resolution.lower().split("x")
-        resolution = (int(w), int(h))
-    else:
-        raise ValueError("Resolution must be in the format WxH, e.g. 640x480")
-    if "," in args.awb_gains:
-        r, b = args.awb_gains.split(",")
-        awb_gains = (float(r), float(b))
-    else:
-        raise ValueError("AWB gains must be in the format red,blue, e.g. 1.5,1.4")
-    if hasattr(args, "start_number"):
-        start_number = args.start_number
-    else:
-        start_number = 0
-    if hasattr(args, "pipeline_config_file"):
-        pipeline_config_file = args.pipeline_config_file
-    else:
-        pipeline_config_file = None
-
-    config = Config(
-        BUTTON_PIN=args.button_pin,
-        LEDS_PIN=args.leds_pin,
-        SAVE_DIR=save_dir,
-        CSV_PATH=csv_path,
-        RESOLUTION=resolution,
-        AWB_GAINS=awb_gains,
-        START_NUMBER=start_number,
-        PIPELINE_CONFIG_FILE=pipeline_config_file,
+def config_from_args(args: argparse.Namespace) -> Config:
+    save_dir = Path(getattr(args, "save_dir", "resistor_pictures"))
+    csv_path = getattr(args, "csv_path", None)
+    return Config(
+        button_pin=args.button_pin,
+        leds_pin=args.leds_pin,
+        resolution=parse_resolution(args.resolution),
+        awb_gains=parse_awb_gains(args.awb_gains),
+        save_dir=save_dir,
+        csv_path=Path(csv_path) if csv_path else save_dir / "resistors.csv",
+        start_number=getattr(args, "start_number", 0),
+        pipeline_config=orchestrator.load_config(
+            getattr(args, "pipeline_config_file", None)
+        ),
     )
 
-    if args.mode == "gather":
-        run_loop(gather_mode, config)
-    elif args.mode == "camera":
-        run_loop(camera_mode, config)
-    elif args.mode == "read":
-        run_loop(read_mode, config)
+
+def main():
+    args = build_parser().parse_args()
+    run_loop(args.func, config_from_args(args))
 
 
 if __name__ == "__main__":
