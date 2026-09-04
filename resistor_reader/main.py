@@ -137,7 +137,7 @@ def gather_mode(picam2, display, config: Config, button: Button, leds: LED):
     """Gather mode:
     Prompt for resistance, take picture, save image and resistance in CSV.
     """
-    display.print("GATH")
+    show_message(display, "GATH")
     ensure_paths(config)
     resistance = input("resistance: ").strip()
     try:
@@ -145,7 +145,7 @@ def gather_mode(picam2, display, config: Config, button: Button, leds: LED):
     except ValueError:
         print("Invalid resistance value, please enter a number.")
         return
-    display.print(resistance_str(float(resistance)))
+    show_message(display, resistance_str(float(resistance)))
     filename = config.save_dir / f"{str(config.image_number).zfill(4)}.jpg"
     leds.on()
     time.sleep(0.1)
@@ -167,17 +167,17 @@ def camera_mode(picam2, display, config: Config, button: Button, leds: LED):
     """
     while (outfile := Path(f"camera_capture_{config.image_number}.jpg")).exists():
         config.image_number += 1
-    display.print("PUSH")
+    show_message(display, "PUSH")
     print("Ready: press the button to take a picture...")
     button.wait_for_press()
     print("Taking picture with flash...")
-    display.print("SNAP")
+    show_message(display, "SNAP")
     leds.on()
     time.sleep(0.1)
     picam2.capture_file(str(outfile))
     time.sleep(0.1)
     leds.off()
-    display.print("DONE")
+    show_message(display, "DONE")
     print(f"Saved to {outfile.resolve()}")
     # Wait for release so we don't immediately retrigger
     button.wait_for_release()
@@ -190,7 +190,7 @@ def read_mode(picam2, display, config: Config, button: Button, leds: LED):
     """
     button.wait_for_press()
     print("Taking picture...")
-    display.print("READ")
+    show_message(display, "READ")
     leds.on()
     time.sleep(0.1)
     try:
@@ -252,7 +252,7 @@ def run_loop(mode_func, config: Config):
     leds = None
     try:
         display = setup_display()
-        display.print("LOAD")
+        show_message(display, "LOAD")
         button, leds = setup_gpio(config)
         try:
             picam2 = setup_camera(config, leds)
