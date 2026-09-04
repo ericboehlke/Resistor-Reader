@@ -51,41 +51,54 @@ def _finalize_pipeline_result(
     resistance: float | None,
     metadata: dict[str, Any],
 ) -> PipelineResult:
-    final_overlay = render_final_overlay(
-        roi_image=roi_image,
-        bounding_boxes=bounding_boxes,
-        colors=colors,
-        resistance=resistance,
-        failure=failure,
-        error_msg=error_msg,
-    )
-    seg_img = _read_debug_image(metadata.get("segmentation", {}).get("debug_image_path"))
-    cls_img = _read_debug_image(metadata.get("classification", {}).get("debug_image_path"))
-    extra_panels = [
-        ("Segmentation", seg_img, None),
-        ("Classification", cls_img, None),
-    ]
-    montage = build_debug_montage(
-        input_image=input_image,
-        preprocessed_image=preprocessed_image,
-        roi_image=roi_image,
-        final_overlay=final_overlay,
-        failure=failure,
-        error_msg=error_msg,
-        extra_panels=extra_panels,
-    )
-
-    montage_path: str | None = None
+    debug_enabled = config.get("runtime", {}).get("debug", {}).get("enabled", False)
     explicit_path = config.get("debug_montage_path")
-    if isinstance(explicit_path, str) and explicit_path:
-        out_path = Path(explicit_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(out_path), cv2.cvtColor(montage, cv2.COLOR_RGB2BGR))
-        montage_path = str(out_path)
-    else:
-        debug_enabled = config.get("runtime", {}).get("debug", {}).get("enabled", False)
-        path = save_image(montage, "montage", debug=debug_enabled, config=config, ts=ts)
-        montage_path = str(path) if path else None
+    has_explicit_path = isinstance(explicit_path, str) and bool(explicit_path)
+
+    montage: np.ndarray | None = None
+    montage_path: str | None = None
+    # Assembling the montage means an overlay render, two debug-image reads and a
+    # multi-panel composite -- skip all of it unless someone actually wants the
+    # picture.
+    if debug_enabled or has_explicit_path:
+        final_overlay = render_final_overlay(
+            roi_image=roi_image,
+            bounding_boxes=bounding_boxes,
+            colors=colors,
+            resistance=resistance,
+            failure=failure,
+            error_msg=error_msg,
+        )
+        seg_img = _read_debug_image(
+            metadata.get("segmentation", {}).get("debug_image_path")
+        )
+        cls_img = _read_debug_image(
+            metadata.get("classification", {}).get("debug_image_path")
+        )
+        extra_panels = [
+            ("Segmentation", seg_img, None),
+            ("Classification", cls_img, None),
+        ]
+        montage = build_debug_montage(
+            input_image=input_image,
+            preprocessed_image=preprocessed_image,
+            roi_image=roi_image,
+            final_overlay=final_overlay,
+            failure=failure,
+            error_msg=error_msg,
+            extra_panels=extra_panels,
+        )
+
+        if has_explicit_path:
+            out_path = Path(explicit_path)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(out_path), cv2.cvtColor(montage, cv2.COLOR_RGB2BGR))
+            montage_path = str(out_path)
+        else:
+            path = save_image(
+                montage, "montage", debug=debug_enabled, config=config, ts=ts
+            )
+            montage_path = str(path) if path else None
 
     metadata["debug_montage_path"] = montage_path
     return PipelineResult(

@@ -153,18 +153,28 @@ def test_resistors():
     rows: list[dict[str, str]] = []
     cases = _load_cases()
     total = len(cases)
+
+    fast_config = copy.deepcopy(test_config)
+    fast_config.setdefault("runtime", {}).setdefault("debug", {})["enabled"] = False
+
     for fname, expected in cases:
+        image = numpy.asarray(PIL.Image.open(fname))
+
+        # First pass: no debug artifacts -- most images pass and never need them.
+        result = orchestrator.read_pipeline(image, copy.deepcopy(fast_config))
+        failed_stage = _infer_failed_stage(result, expected)
+        if not failed_stage:
+            continue
+
+        # This one failed: re-run it with debug on so the report can link to the
+        # montage and per-stage images.
         image_name = Path(fname).stem
         case_config = copy.deepcopy(test_config)
         case_config.setdefault("runtime", {}).setdefault("debug", {})["enabled"] = True
         case_config["runtime"]["debug"]["dir"] = str(run_dir)
         case_config["runtime"]["debug"]["filename_prefix"] = image_name
         case_config["debug_montage_path"] = str(run_dir / f"{image_name}_montage.jpg")
-
-        result = orchestrator.read_pipeline(
-            numpy.asarray(PIL.Image.open(fname)),
-            case_config,
-        )
+        result = orchestrator.read_pipeline(image, case_config)
         failed_stage = _infer_failed_stage(result, expected)
         if not failed_stage:
             continue
