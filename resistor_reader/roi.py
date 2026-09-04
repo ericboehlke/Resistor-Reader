@@ -11,7 +11,6 @@ from typing import Tuple
 
 import cv2
 import numpy as np
-from scipy import ndimage
 
 from .logging_utils import save_image
 from .models import ErrorCodeEnum, RoIInput, RoIOutput
@@ -43,18 +42,20 @@ def _foreground_mask(hsv: np.ndarray) -> np.ndarray:
 def _largest_component(mask: np.ndarray) -> np.ndarray:
     """Keep only the largest connected component in ``mask``."""
 
-    labeled, num = ndimage.label(mask)
-    if num == 0:
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8), connectivity=4
+    )
+    if num <= 1:
         raise ValueError("no foreground found")
-    sizes = ndimage.sum(mask, labeled, range(1, num + 1))
-    label = int(np.argmax(sizes)) + 1
-    return (labeled == label).astype(np.uint8)
+    # Row 0 is the background component; pick the largest of the rest.
+    largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    return (labels == largest).astype(np.uint8)
 
 
 def _remove_leads(mask: np.ndarray, dist_thresh: float = 3.0) -> np.ndarray:
     """Remove thin leads using a distance transform."""
 
-    dist = ndimage.distance_transform_edt(mask)
+    dist = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
     return (dist >= dist_thresh).astype(np.uint8)
 
 
@@ -71,28 +72,32 @@ def _rotate_and_crop(
 
     rot_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
     h, w = image.shape[:2]
-    rotated_img = cv2.warpAffine(
-        image, rot_mat, (w, h), flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255)
-    )
-    rotated_mask = cv2.warpAffine(mask, rot_mat, (w, h), flags=cv2.INTER_NEAREST)
 
-    ys, xs = np.where(rotated_mask > 0)
-    if ys.size == 0 or xs.size == 0:
-        # Nothing in mask → return rotated full image and no bbox
+    # Where the foreground lands after rotation, from the points alone -- no need
+    # to warp the whole frame just to read off a bounding box.
+    rot_pts = cv2.transform(pts.astype(np.float32), rot_mat).reshape(-1, 2)
+    if rot_pts.size == 0:
         empty_mask = np.zeros((h, w), dtype=np.uint8)
+        rotated_img = cv2.warpAffine(
+            image, rot_mat, (w, h), flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255)
+        )
         return rotated_img, empty_mask, (0, 0, h, w)
 
-    y0, y1 = ys.min(), ys.max() + 1
-    x0, x1 = xs.min(), xs.max() + 1
+    x0 = max(0, int(np.floor(rot_pts[:, 0].min())) - pad)
+    y0 = max(0, int(np.floor(rot_pts[:, 1].min())) - pad)
+    x1 = min(w, int(np.ceil(rot_pts[:, 0].max())) + pad)
+    y1 = min(h, int(np.ceil(rot_pts[:, 1].max())) + pad)
 
-    # Apply padding and clamp to bounds
-    y0 = max(0, y0 - pad)
-    x0 = max(0, x0 - pad)
-    y1 = min(h, y1 + pad)
-    x1 = min(w, x1 + pad)
-
-    crop = rotated_img[y0:y1, x0:x1]
-    crop_mask = rotated_mask[y0:y1, x0:x1]
+    # Warp straight into the crop: fold the crop origin into the translation so
+    # the output is only the box we keep, not the full rotated frame.
+    crop_mat = rot_mat.copy()
+    crop_mat[0, 2] -= x0
+    crop_mat[1, 2] -= y0
+    dsize = (max(1, x1 - x0), max(1, y1 - y0))
+    crop = cv2.warpAffine(
+        image, crop_mat, dsize, flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255)
+    )
+    crop_mask = cv2.warpAffine(mask, crop_mat, dsize, flags=cv2.INTER_NEAREST)
     return crop, crop_mask, (y0, x0, y1, x1)
 
 

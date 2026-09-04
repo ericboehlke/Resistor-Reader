@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
 from .logging_utils import save_image
@@ -23,12 +24,15 @@ def auto_white_balance(array: np.ndarray) -> np.ndarray:
     numpy.ndarray
         White-balanced array of the same shape and dtype.
     """
-    image = array.astype(np.float32)
-    avg_rgb = image.reshape(-1, 3).mean(axis=0)
-    gray_value = avg_rgb.mean()
-    scale = gray_value / avg_rgb
-    balanced = image * scale
-    return np.clip(balanced, 0, 255).astype(np.uint8)
+    avg_rgb = np.asarray(cv2.mean(array)[:3], dtype=np.float32)
+    scale = avg_rgb.mean() / avg_rgb
+    # The transform is a per-channel gain on an 8-bit image, so a 256-entry
+    # lookup per channel reproduces ``clip(image * scale, 0, 255)`` exactly at a
+    # fraction of the cost of the full-frame float multiply.
+    ramp = np.arange(256, dtype=np.float32)
+    lut = np.clip(ramp[:, None] * scale, 0, 255).astype(np.uint8)
+    channels = [cv2.LUT(array[:, :, c], lut[:, c]) for c in range(3)]
+    return cv2.merge(channels)
 
 
 def preprocess(
