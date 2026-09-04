@@ -1,13 +1,7 @@
-"""Core package for the resistor reader project."""
+"""Core package for the resistor reader project.
 
-from . import bands, logging_utils, models, orchestrator, preprocess, resolve, roi
-
-__all__ = [
-    "orchestrator",
-    "preprocess",
-    "logging_utils",
-    "roi",
-    "bands",
-    "resolve",
-    "models",
-]
+Submodules are deliberately *not* imported here: ``main.py`` on the appliance
+imports only what it needs, and pulling OpenCV in at package-import time costs
+noticeable startup on a Pi Zero.  Import stages explicitly, e.g.
+``from resistor_reader import orchestrator``.
+"""

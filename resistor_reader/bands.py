@@ -79,7 +79,6 @@ def _segmentation_cfg(config: dict[str, Any]) -> dict[str, Any]:
         "min_signal": float(seg.get("min_signal", 5.0)),
         "end_pin_ratio": float(seg.get("end_pin_ratio", 0.04)),
         "upsample": max(1, int(seg.get("upsample", 4))),
-        "create_plot": bool(seg.get("create_plot", False)),
     }
 
 
@@ -536,18 +535,16 @@ def segment_bands(
             },
         )
 
+    # ``_extract_bands`` returns exactly four runs or raises, so reaching here
+    # means four boxes.
     h = image.shape[0]
     boxes: list[BandBoundingBox] = [(int(s), 0, int(e), int(h)) for s, e in segments]
-    success = len(boxes) == 4
     metadata: dict[str, object] = {
         "raw_segments": segments,
         "body_lab": [float(v) for v in dbg_cols["body_lab"]],
         "body_tex": float(dbg_cols["body_tex"]),
         "threshold": float(dbg_cols["threshold"]),
     }
-    if not success:
-        metadata["error_code"] = ErrorCodeEnum.E03.value
-        metadata["error_msg"] = f"Expected 4 bands, found {len(boxes)}"
 
     dbg = debug and stage_input.config.get("segmentation", {}).get("debug_image", False)
     if dbg:
@@ -581,7 +578,7 @@ def segment_bands(
 
     return SegmentationOutput(
         bounding_boxes=boxes,
-        success=success,
+        success=True,
         _metadata=metadata,
     )
 

@@ -7,7 +7,7 @@ from typing import Iterable
 import cv2
 import numpy as np
 
-from .models import BandBoundingBox, ColorsEnum, ErrorCodeEnum
+from .models import BandBoundingBox, BandColorTuple, ErrorCodeEnum
 
 
 def _ensure_rgb(image: np.ndarray | None) -> np.ndarray | None:
@@ -67,7 +67,7 @@ def _panel(
 def render_final_overlay(
     roi_image: np.ndarray | None,
     bounding_boxes: list[BandBoundingBox] | None,
-    colors: tuple[ColorsEnum, ColorsEnum, ColorsEnum, ColorsEnum] | None,
+    colors: BandColorTuple | None,
     resistance: float | None,
     failure: ErrorCodeEnum | None,
     error_msg: str,

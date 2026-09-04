@@ -151,12 +151,6 @@ def main() -> None:
     parser.add_argument("--image", required=True, help="Image file to process repeatedly")
     parser.add_argument("--config", default="config.yaml", help="Base pipeline YAML config")
     parser.add_argument("--save-config", default=None, help="Optional path to save tuned YAML")
-    parser.add_argument(
-        "--stage",
-        default="all",
-        choices=["all", "preprocess", "roi", "segmentation", "classification"],
-        help="Reserved for stage-focused views",
-    )
     parser.add_argument("--debug", action="store_true", help="Force runtime.debug.enabled=true")
     parser.add_argument("--debug-dir", default=None, help="Override runtime.debug.dir")
     args = parser.parse_args()

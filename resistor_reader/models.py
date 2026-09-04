@@ -14,12 +14,22 @@ BandColorTuple: TypeAlias = tuple["ColorsEnum", "ColorsEnum", "ColorsEnum", "Col
 
 
 class ErrorCodeEnum(str, Enum):
-    """Error codes for known pipeline failure modes."""
+    """Error codes for known failure modes, shown on the segment display.
+
+    One code space, one owner per code.  ``E01`` and ``E05``-``E06`` are raised
+    by ``main.py`` around the pipeline; ``E02``-``E04`` and ``E07`` are raised by
+    the stage that detected the problem and propagated unchanged by the
+    orchestrator.  Names are three characters so they fit the four-digit
+    display.
+    """
 
     E01 = "camera failure"
     E02 = "no resistor found"
     E03 = "too many/few bands found"
     E04 = "invalid band set"
+    E05 = "pipeline crashed"
+    E06 = "low confidence"
+    E07 = "bad input image"
 
 
 class ColorsEnum(str, Enum):
@@ -37,12 +47,6 @@ class ColorsEnum(str, Enum):
     WHITE = "white"
     GOLD = "gold"
     SILVER = "silver"
-
-
-@dataclass
-class PipelineInput:
-    image: np.ndarray
-    config: dict[str, Any]
 
 
 @dataclass

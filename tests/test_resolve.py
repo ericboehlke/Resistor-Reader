@@ -1,10 +1,7 @@
 import pytest
 
-from resistor_reader.resolve import resolve_value
 from resistor_reader.models import ColorsEnum, ErrorCodeEnum, ResolveInput
-
-# Import your function (adjust the import path as needed)
-# from your_module import resolve_value
+from resistor_reader.resolve import resolve_value
 
 # --- Happy-path tests ---------------------------------------------------------
 
@@ -41,19 +38,6 @@ def test_gold_silver_multipliers(bands, expected):
     assert result.resistance == pytest.approx(expected)
 
 
-def test_case_and_whitespace_insensitivity():
-    bands = (ColorsEnum.RED, ColorsEnum.VIOLET, ColorsEnum.YELLOW , ColorsEnum.GOLD)
-    # 27 × 10,000 = 270,000 Ω
-    result = resolve_value(
-        ResolveInput(
-            colors=bands,
-            config={},
-        )
-    )
-    assert result.success
-    assert result.resistance == pytest.approx(270000.0)
-
-
 # --- Error-handling tests -----------------------------------------------------
 
 
@@ -78,9 +62,6 @@ def test_requires_four_bands():
     )
     assert not result_5.success
     assert result_5._metadata.get("error_code") == ErrorCodeEnum.E04.value
-
-
-
 
 
 

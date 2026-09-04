@@ -15,6 +15,7 @@ from .debug_montage import build_debug_montage, render_final_overlay
 from .logging_utils import save_image
 from .models import (
     BandBoundingBox,
+    BandColorTuple,
     ClassificationInput,
     ColorsEnum,
     DecodeInput,
@@ -47,7 +48,7 @@ def _finalize_pipeline_result(
     failure: ErrorCodeEnum | None,
     error_msg: str,
     bounding_boxes: list[BandBoundingBox] | None,
-    colors: tuple[ColorsEnum, ColorsEnum, ColorsEnum, ColorsEnum] | None,
+    colors: BandColorTuple | None,
     resistance: float | None,
     metadata: dict[str, Any],
 ) -> PipelineResult:
@@ -264,14 +265,6 @@ def read_pipeline(
             "confidence": dec_out.confidence,
         },
     )
-
-
-def read_resistor(array: np.ndarray, config: dict[str, Any] | None = None) -> float:
-    """Backward-compatible convenience API returning resistance only."""
-    result = read_pipeline(array, config=config)
-    if result.failure is not None or result.resistance is None:
-        raise ValueError(result.error_msg or "Pipeline failed")
-    return result.resistance
 
 
 def load_config(config_file: str | None) -> dict[str, Any]:
