@@ -35,8 +35,12 @@
 #
 # Result (baked into WORK_IMG):
 #   * user "pi" / password "raspberry" (defaults), SSH enabled, no setup wizard
-#   * USB OTG gadget ethernet: plug the Pi's data port into this PC, then
-#     `ssh pi@10.42.0.1` (Pi runs DHCP/NAT for the host via NM ipv4 method=shared)
+#   * USB OTG gadget ethernet (CDC-NCM, built with configfs/libcomposite): plug
+#     the Pi's data port into this PC, give the PC 10.42.0.2/24 on the gadget
+#     link, then `ssh pi@10.42.0.1`. The Pi holds a static 10.42.0.1/24, brought
+#     up by usb-gadget-ncm.service before NetworkManager starts. NCM (not the
+#     legacy g_ether/CDC-ECM gadget) because ECM's bulk TX path stalls against
+#     many xHCI hosts ("cdc_ether ... NETDEV WATCHDOG: transmit queue timed out").
 #   * all README apt packages + i2c-tools installed (and upgraded unless
 #     FULL_UPGRADE=0)
 #   * Resistor-Reader cloned at /home/pi/Resistor-Reader on branch claude-rewrite
@@ -71,7 +75,7 @@ APT_PKGS=(
   git python3-pip
   python3-rpi.gpio python3-picamera2 python3-opencv
   python3-pil python3-scipy python3-yaml python3-pytest
-  i2c-tools dnsmasq-base
+  i2c-tools
 )
 # No build-essential / python3-dev: the venv pip step installs only pure-Python
 # and prebuilt piwheels wheels, so nothing is compiled on the appliance. Add
@@ -210,42 +214,144 @@ info "SSH enabled"
 printf 'pi:%s\n' "$(openssl passwd -6 raspberry)" > "$BOOT/userconf.txt"
 info "user 'pi' / password 'raspberry' preseeded"
 
-# USB gadget ethernet.
-# NB: stock config.txt already ships `dtoverlay=dwc2,dr_mode=host` under a
-# [cm4]/[cm5] filter — that must NOT satisfy this check, or the Pi Zero never
-# gets put into peripheral mode (no UDC -> g_ether can't bind -> no usb0).
-# Match the peripheral override specifically, and append it under [all] at EOF
-# so it wins for every model.
+# USB gadget: put dwc2 into peripheral mode + load the module early. We do NOT
+# load g_ether — the gadget is assembled at boot as CDC-NCM via configfs (see
+# step 8). NB: stock config.txt already ships `dtoverlay=dwc2,dr_mode=host`
+# under a [cm4]/[cm5] filter — that must NOT satisfy this check, or the Pi Zero
+# never gets put into peripheral mode (no UDC). Match the peripheral override
+# specifically, and append it under [all] at EOF so it wins for every model.
 if ! grep -qE '^dtoverlay=dwc2,dr_mode=peripheral' "$BOOT/config.txt"; then
   printf '\n[all]\ndtoverlay=dwc2,dr_mode=peripheral\n' >> "$BOOT/config.txt"
   info "added dtoverlay=dwc2,dr_mode=peripheral to config.txt"
 fi
-# cmdline.txt is a single line; insert the module load right after rootwait,
-# with fixed gadget MACs so the host NIC name is stable across reboots
+# cmdline.txt is a single line; load dwc2 early so the UDC exists by the time
+# usb-gadget-ncm.service runs. (No g_ether / no g_ether.*_addr params.)
 if ! grep -q 'modules-load=dwc2' "$BOOT/cmdline.txt"; then
-  sed -i 's/\brootwait\b/rootwait modules-load=dwc2,g_ether g_ether.host_addr=9a:57:0e:12:34:56 g_ether.dev_addr=9a:57:0e:12:34:57/' "$BOOT/cmdline.txt"
-  info "added modules-load=dwc2,g_ether to cmdline.txt"
+  sed -i 's/\brootwait\b/rootwait modules-load=dwc2/' "$BOOT/cmdline.txt"
+  info "added modules-load=dwc2 to cmdline.txt"
 fi
 ok "boot partition staged"
 
-# --- [8] NetworkManager profile ----------------------------------------------
-step "NetworkManager profile (Pi hands the host an address + NATs its uplink)"
-install -d -m 700 "$ROOT/etc/NetworkManager/system-connections"
-cat > "$ROOT/etc/NetworkManager/system-connections/usb0.nmconnection" <<'EOF'
-[connection]
-id=usb0
-type=ethernet
-interface-name=usb0
-autoconnect=true
+# --- [8] USB CDC-NCM gadget + static link ------------------------------------
+step "USB CDC-NCM gadget (configfs) + static 10.42.0.1 before NetworkManager"
+# Fixed gadget MACs: host side 9a:57:0e:12:34:56 (keeps the PC's NIC name
+# stable), Pi side 9a:57:0e:12:34:57. NCM rather than the legacy g_ether ECM
+# gadget: ECM's bulk TX path stalls against many xHCI hosts
+# ("cdc_ether ... NETDEV WATCHDOG: transmit queue timed out").
+install -d "$ROOT/usr/local/sbin"
+cat > "$ROOT/usr/local/sbin/usb-gadget-ncm.sh" <<'EOF'
+#!/bin/sh
+# CDC-NCM USB Ethernet gadget for the Resistor-Reader appliance.
+set -e
+G=/sys/kernel/config/usb_gadget/rr0
+HOST_MAC=9a:57:0e:12:34:56
+DEV_MAC=9a:57:0e:12:34:57
+IP=10.42.0.1/24
 
-[ipv4]
-method=shared
+find_iface() {
+  for d in /sys/class/net/*; do
+    [ -f "$d/address" ] || continue
+    [ "$(cat "$d/address" 2>/dev/null)" = "$DEV_MAC" ] && { basename "$d"; return 0; }
+  done
+  return 1
+}
 
-[ipv6]
-method=ignore
+up() {
+  modprobe configfs     2>/dev/null || true
+  modprobe libcomposite 2>/dev/null || true
+  modprobe usb_f_ncm    2>/dev/null || true
+  mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config 2>/dev/null || true
+
+  if [ ! -d "$G" ]; then
+    i=0; while [ -z "$(ls /sys/class/udc 2>/dev/null)" ]; do
+      i=$((i+1)); [ "$i" -gt 150 ] && { echo "no UDC after 15s"; exit 1; }; sleep 0.1
+    done
+    udc=$(ls /sys/class/udc | head -n1)
+
+    mkdir -p "$G"
+    echo 0x1d6b > "$G/idVendor"        # Linux Foundation
+    echo 0x0104 > "$G/idProduct"       # Multifunction Composite Gadget
+    echo 0x0100 > "$G/bcdDevice"
+    echo 0x0200 > "$G/bcdUSB"
+    echo 0xEF   > "$G/bDeviceClass"    # Misc (IAD)
+    echo 0x02   > "$G/bDeviceSubClass"
+    echo 0x01   > "$G/bDeviceProtocol"
+
+    mkdir -p "$G/strings/0x409"
+    echo "$(cat /etc/machine-id 2>/dev/null || echo rr0000000000)" > "$G/strings/0x409/serialnumber"
+    echo "Raspberry Pi"               > "$G/strings/0x409/manufacturer"
+    echo "Resistor-Reader USB gadget" > "$G/strings/0x409/product"
+
+    mkdir -p "$G/functions/ncm.usb0"
+    echo "$HOST_MAC" > "$G/functions/ncm.usb0/host_addr"
+    echo "$DEV_MAC"  > "$G/functions/ncm.usb0/dev_addr"
+
+    mkdir -p "$G/configs/c.1/strings/0x409"
+    echo "CDC-NCM" > "$G/configs/c.1/strings/0x409/configuration"
+    echo 250       > "$G/configs/c.1/MaxPower"
+    ln -sf "$G/functions/ncm.usb0" "$G/configs/c.1/"
+
+    echo "$udc" > "$G/UDC"
+  fi
+
+  i=0; while ! iface=$(find_iface); do
+    i=$((i+1)); [ "$i" -gt 150 ] && { echo "gadget netdev never appeared"; exit 1; }; sleep 0.1
+  done
+  ip link set "$iface" up
+  ip addr replace "$IP" dev "$iface"
+  echo "gadget up: $iface -> $IP"
+}
+
+down() {
+  [ -d "$G" ] || exit 0
+  echo "" > "$G/UDC" 2>/dev/null || true
+  rm -f "$G"/configs/c.1/ncm.usb0
+  rmdir "$G"/configs/c.1/strings/0x409 "$G"/configs/c.1 \
+        "$G"/functions/ncm.usb0 "$G"/strings/0x409 "$G" 2>/dev/null || true
+}
+
+case "${1:-up}" in
+  up)   up ;;
+  down) down ;;
+  *) echo "usage: $0 {up|down}"; exit 1 ;;
+esac
 EOF
-chmod 600 "$ROOT/etc/NetworkManager/system-connections/usb0.nmconnection"
-ok "usb0.nmconnection written (method=shared)"
+chmod +x "$ROOT/usr/local/sbin/usb-gadget-ncm.sh"
+
+cat > "$ROOT/etc/systemd/system/usb-gadget-ncm.service" <<'EOF'
+[Unit]
+Description=USB CDC-NCM Ethernet gadget (static 10.42.0.1)
+DefaultDependencies=no
+After=systemd-modules-load.service sys-kernel-config.mount
+Wants=sys-kernel-config.mount
+Before=network-pre.target NetworkManager.service systemd-networkd.service
+Wants=network-pre.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/usb-gadget-ncm.sh up
+ExecStop=/usr/local/sbin/usb-gadget-ncm.sh down
+
+[Install]
+WantedBy=sysinit.target
+EOF
+install -d "$ROOT/etc/systemd/system/sysinit.target.wants"
+ln -sf ../usb-gadget-ncm.service "$ROOT/etc/systemd/system/sysinit.target.wants/usb-gadget-ncm.service"
+
+# This image's networking is cloud-init + netplan -> NetworkManager, and NM's
+# generated "globally-managed-devices" list does NOT include the gadget iface,
+# so NM would ignore any keyfile anyway. Make that explicit + belt-and-braces:
+# keep NM's hands off the gadget so it can't clobber the static address.
+install -d "$ROOT/etc/NetworkManager/conf.d"
+cat > "$ROOT/etc/NetworkManager/conf.d/99-usb-gadget-unmanaged.conf" <<'EOF'
+[device-usb-gadget-ncm]
+match-device=mac:9A:57:0E:12:34:57
+managed=0
+EOF
+ok "usb-gadget-ncm.service + NM unmanaged rule written"
 
 # --- [9] qemu-arm chroot: mount --------------------------------------------------
 step "qemu-arm chroot: bind mounts + DNS"
@@ -432,6 +538,16 @@ first boot auto-expands the rootfs to fill the card (stock Pi OS
 init_resize hook). If "df -h /" still shows only a few GiB after
 boot, run once:
     sudo raspi-config nonint do_expand_rootfs && sudo reboot
+
+connecting from this PC: plug the Pi's data port in, give the gadget
+NIC a static address on the same /24, then ssh:
+    sudo nmcli connection add type ethernet con-name pi-gadget \
+      mac 9a:57:0e:12:34:56 ipv4.method manual \
+      ipv4.addresses 10.42.0.2/24 ipv6.method ignore
+    ssh pi@10.42.0.1            # password: raspberry
+(the Pi holds 10.42.0.1 via usb-gadget-ncm.service; there is no DHCP
+ on the link. If ssh times out, on the Pi's card read
+ /boot/firmware/netdebug.txt.)
 
 Then, over USB (ssh pi@10.42.0.1), once you've confirmed it works,
 make the root filesystem read-only with:
